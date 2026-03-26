@@ -17,8 +17,9 @@
 
 ## ✨ Overview / 项目简介
 
-Banana Mall is an AI-native workspace designed to turn product images into fully structured, high-conversion e-commerce detail pages.
+**BananaMall** 是一个 AI 驱动的电商详情页生成工具，由 [MatrixInspire（灵矩绘境）](https://mxinspire.com) 开发。
 
+Banana Mall is an AI-native workspace designed to turn product images into fully structured, high-conversion e-commerce detail pages.
 Banana Mall 是一个 AI 原生的电商内容工作台，可以将商品图片转化为完整的高转化详情页。由 MatrixInspire（灵矩绘境） 开发。
 
 ---
