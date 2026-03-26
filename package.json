@@ -6,17 +6,19 @@
   "author": "MatrixInspire Inc",
   "main": "desktop/main.cjs",
   "scripts": {
-    "dev": "node ./scripts/run-next-safe.cjs dev",
-    "build": "npm run prisma:generate && node ./scripts/run-next-safe.cjs build",
-    "start": "node ./scripts/run-next-safe.cjs start",
-    "desktop:start": "node ./scripts/build-desktop.cjs start",
-    "build:desktop": "node ./scripts/build-desktop.cjs prepare",
-    "dist:win": "node ./scripts/build-desktop.cjs dist:win",
-    "lint": "node -e \"console.log('Linting is not configured for this Windows path-safe build.')\"",
-    "prisma:generate": "node ./scripts/run-prisma-safe.cjs generate",
-    "prisma:migrate": "node ./scripts/apply-prisma-migrations.cjs",
-    "prisma:deploy": "node ./scripts/apply-prisma-migrations.cjs"
-  },
+  "dev": "node ./scripts/run-next-safe.cjs dev",
+  "build": "npm run prisma:generate && node ./scripts/run-next-safe.cjs build",
+  "start": "node ./scripts/run-next-safe.cjs start",
+  "desktop:start": "node ./scripts/build-desktop.cjs start",
+  "build:desktop": "node ./scripts/build-desktop.cjs prepare",
+  "dist:win": "npm run build:desktop && .\\node_modules\\.bin\\electron-builder.cmd --win nsis",
+  "dist:green": "npm run build:desktop && .\\node_modules\\.bin\\electron-builder.cmd --win dir zip",
+  "dist:all-win": "npm run build:desktop && .\\node_modules\\.bin\\electron-builder.cmd --win nsis dir zip",
+  "lint": "node -e \"console.log('Linting is not configured for this Windows path-safe build.')\"",
+  "prisma:generate": "node ./scripts/run-prisma-safe.cjs generate",
+  "prisma:migrate": "node ./scripts/apply-prisma-migrations.cjs",
+  "prisma:deploy": "node ./scripts/apply-prisma-migrations.cjs"
+},
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
     "@prisma/client": "^6.19.2",
@@ -51,7 +53,7 @@
     "@types/react-dom": "^18.3.5",
     "autoprefixer": "^10.4.21",
     "electron": "^35.2.2",
-    "electron-builder": "^26.0.12",
+    "electron-builder": "^26.8.1",
     "postcss": "^8.4.49",
     "prisma": "^6.19.2",
     "tailwindcss": "^3.4.17",
@@ -61,18 +63,24 @@
     "appId": "com.matrixinspire.bananamall",
     "productName": "banana-mall",
     "asar": false,
+    "asarUnpack": [
+      ".next/standalone/node_modules/.prisma/**/*",
+      ".next/standalone/node_modules/@prisma/**/*"
+    ],
     "directories": {
-      "output": "dist-desktop"
+      "output": "dist-desktop",
+      "buildResources": "build"
     },
     "files": [
       "desktop/**/*",
       ".next/standalone/**/*",
+      ".next/static/**/*",
+      "public/**/*",
       "scripts/runtime-paths.cjs",
+      "scripts/apply-prisma-migrations.cjs",
       "package.json"
     ],
     "win": {
-      "signAndEditExecutable": false,
-      "verifyUpdateCodeSignature": false,
       "icon": "build/icon.ico",
       "target": [
         {
@@ -80,9 +88,21 @@
           "arch": [
             "x64"
           ]
+        },
+        {
+          "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
         }
       ],
-      "artifactName": "banana-mall-setup-${version}.${ext}"
+      "artifactName": "banana-mall-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,

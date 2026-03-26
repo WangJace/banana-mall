@@ -11,9 +11,16 @@ const { app, BrowserWindow, dialog } = require("electron");
 const { toSqliteFileUrl } = require("../scripts/runtime-paths.cjs");
 
 let mainWindow = null;
+let splashWindow = null;
 let serverProcess = null;
 let serverUrl = null;
 let isQuitting = false;
+
+function getWindowIcon() {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, "icon.ico")
+    : path.join(__dirname, "../build/icon.ico");
+}
 
 function getStandaloneRoot() {
   return path.resolve(__dirname, "..", ".next", "standalone");
@@ -62,6 +69,7 @@ async function ensureDesktopRuntimeConfig() {
     appSecret,
     updatedAt: new Date().toISOString(),
   };
+
   await writeJson(configPath, nextConfig);
 
   return {
@@ -160,6 +168,7 @@ function waitForServer(url, timeoutMs = 30000) {
     const attempt = () => {
       const request = http.get(url, (response) => {
         response.resume();
+
         if ((response.statusCode ?? 500) < 500) {
           resolve(true);
           return;
@@ -178,6 +187,7 @@ function waitForServer(url, timeoutMs = 30000) {
           reject(new Error("Timed out waiting for local desktop server to start."));
           return;
         }
+
         setTimeout(attempt, 500);
       });
     };
@@ -215,7 +225,7 @@ async function startNextServer(runtime) {
     if (!isQuitting && code !== 0) {
       dialog.showErrorBox(
         "banana-mall 启动失败",
-        serverErrors || `内置服务异常退出，退出码：${code}`,
+        serverErrors || `内置服务异常退出，退出码：${code}`
       );
       app.quit();
     }
@@ -224,6 +234,148 @@ async function startNextServer(runtime) {
   serverUrl = `http://127.0.0.1:${port}`;
   await waitForServer(serverUrl);
   return serverUrl;
+}
+
+function createSplashWindow() {
+  splashWindow = new BrowserWindow({
+    width: 460,
+    height: 280,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    closable: true,
+    frame: false,
+    show: false,
+    center: true,
+    backgroundColor: "#111827",
+    title: "banana-mall",
+    icon: getWindowIcon(),
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+
+  const splashHtml = `
+    <!DOCTYPE html>
+    <html lang="zh-CN">
+      <head>
+        <meta charset="UTF-8" />
+        <meta
+          http-equiv="Content-Security-Policy"
+          content="default-src 'self' 'unsafe-inline' data:;"
+        />
+        <title>banana-mall</title>
+        <style>
+          * { box-sizing: border-box; }
+          html, body {
+            margin: 0;
+            width: 100%;
+            height: 100%;
+            font-family: "Segoe UI", Arial, sans-serif;
+            background: linear-gradient(135deg, #111827 0%, #1f2937 100%);
+            color: #ffffff;
+          }
+          .wrap {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+          }
+          .card {
+            width: 100%;
+            border-radius: 18px;
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            padding: 28px 24px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.32);
+          }
+          .title {
+            font-size: 22px;
+            font-weight: 700;
+            letter-spacing: 0.2px;
+            margin-bottom: 8px;
+          }
+          .desc {
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.72);
+            line-height: 1.7;
+            margin-bottom: 18px;
+          }
+          .status {
+            font-size: 13px;
+            color: #93c5fd;
+            margin-bottom: 14px;
+            min-height: 20px;
+          }
+          .bar {
+            width: 100%;
+            height: 8px;
+            border-radius: 999px;
+            overflow: hidden;
+            background: rgba(255, 255, 255, 0.08);
+          }
+          .bar > div {
+            width: 42%;
+            height: 100%;
+            border-radius: 999px;
+            background: linear-gradient(90deg, #60a5fa, #34d399);
+            animation: loading 1.2s ease-in-out infinite;
+          }
+          .foot {
+            margin-top: 14px;
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.48);
+          }
+          @keyframes loading {
+            0% { transform: translateX(-110%); }
+            100% { transform: translateX(260%); }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="wrap">
+          <div class="card">
+            <div class="title">Matrix Inspire banana-mall</div>
+            <div class="desc">AI e-commerce detail page generation and editing workspace</div>
+            <div class="status" id="status">正在启动应用...</div>
+            <div class="bar"><div></div></div>
+            <div class="foot">请稍候，正在初始化本地服务与数据环境</div>
+          </div>
+        </div>
+      </body>
+    </html>
+  `;
+
+  splashWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(splashHtml)}`);
+
+  splashWindow.once("ready-to-show", () => {
+    splashWindow?.show();
+  });
+
+  splashWindow.on("closed", () => {
+    splashWindow = null;
+  });
+}
+
+function updateSplashStatus(text) {
+  if (!splashWindow || splashWindow.isDestroyed()) {
+    return;
+  }
+
+  const safeText = JSON.stringify(text);
+  splashWindow.webContents
+    .executeJavaScript(
+      `(() => {
+        const el = document.getElementById("status");
+        if (el) el.textContent = ${safeText};
+      })();`,
+      true
+    )
+    .catch(() => {});
 }
 
 function createMainWindow(url) {
@@ -236,6 +388,7 @@ function createMainWindow(url) {
     autoHideMenuBar: true,
     backgroundColor: "#f5f5f5",
     title: "banana-mall",
+    icon: getWindowIcon(),
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -245,6 +398,9 @@ function createMainWindow(url) {
   });
 
   mainWindow.once("ready-to-show", () => {
+    if (splashWindow && !splashWindow.isDestroyed()) {
+      splashWindow.close();
+    }
     mainWindow?.show();
   });
 
@@ -264,6 +420,7 @@ async function shutdownServerProcess() {
     const currentProcess = serverProcess;
     currentProcess.once("exit", () => resolve(null));
     currentProcess.kill();
+
     setTimeout(() => {
       if (!currentProcess.killed) {
         currentProcess.kill("SIGKILL");
@@ -274,10 +431,30 @@ async function shutdownServerProcess() {
 }
 
 async function bootstrapDesktopApp() {
+  console.time("desktop:total");
+
+  createSplashWindow();
+  updateSplashStatus("正在准备本地运行环境...");
+  console.time("desktop:runtime");
   const runtime = await ensureDesktopRuntimeConfig();
+  console.timeEnd("desktop:runtime");
+
+  updateSplashStatus("正在初始化数据库...");
+  console.time("desktop:migration");
   await spawnNodeScript(getMigrationScript(), getRuntimeEnv(runtime, 3000));
+  console.timeEnd("desktop:migration");
+
+  updateSplashStatus("正在启动本地服务...");
+  console.time("desktop:server");
   const url = await startNextServer(runtime);
+  console.timeEnd("desktop:server");
+
+  updateSplashStatus("正在加载界面...");
+  console.time("desktop:window");
   await createMainWindow(url);
+  console.timeEnd("desktop:window");
+
+  console.timeEnd("desktop:total");
 }
 
 app.on("before-quit", async () => {
@@ -301,7 +478,7 @@ app.whenReady().then(() => {
   bootstrapDesktopApp().catch((error) => {
     dialog.showErrorBox(
       "banana-mall 启动失败",
-      error instanceof Error ? error.message : "未知错误",
+      error instanceof Error ? error.message : "未知错误"
     );
     app.quit();
   });
