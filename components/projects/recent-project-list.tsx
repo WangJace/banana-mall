@@ -58,7 +58,7 @@ export function RecentProjectList({ initialProjects }: RecentProjectListProps) {
   }
 
   return (
-    <div className="columns-1 gap-4 md:columns-2 xl:columns-3">
+    <div className="columns-1 gap-4 md:columns-2 xl:columns-4">
       {projects.map((project) => (
         <article
           key={project.id}

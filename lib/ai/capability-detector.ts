@@ -1,5 +1,13 @@
 import type { CapabilityMap, ModelDetectionResult, ModelRoleMap } from "@/types/domain";
 
+type DetectedModelInput = {
+  id: string;
+  label?: string;
+  type?: string | null;
+  category?: string | null;
+  modalities?: string[];
+};
+
 const emptyCapabilityMap = (): CapabilityMap => ({
   text: false,
   vision: false,
@@ -19,27 +27,67 @@ const emptyRoleMap = (): ModelRoleMap => ({
   image_edit: false,
 });
 
-export function detectModelCapabilities(modelId: string): CapabilityMap {
-  const id = modelId.toLowerCase();
-  const map = emptyCapabilityMap();
+function modelText(model: string | DetectedModelInput) {
+  if (typeof model === "string") {
+    return model.toLowerCase();
+  }
 
-  if (/(gpt|gemini|claude|qwen|glm|deepseek|chat|instruct|command|llama|mistral)/.test(id)) {
+  return [
+    model.id,
+    model.label,
+    model.type,
+    model.category,
+    ...(model.modalities ?? []),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+export function detectModelCapabilities(model: string | DetectedModelInput): CapabilityMap {
+  const id = (typeof model === "string" ? model : model.id).toLowerCase();
+  const text = modelText(model);
+  const map = emptyCapabilityMap();
+  const isGptImageModel = /(?:^|[-_\s])gpt[-_\s]?image(?:[-_\s]?(?:\d+(?:\.\d+)?|mini))?|chatgpt-image/.test(id);
+  const isDallE2 = /dall[-_\s]?e[-_\s]?2/.test(id);
+  const isImageTyped = /(^|\b)(image|images|image_generation|image-gen|image_gen)(\b|$)/.test(text);
+  const isImageEditTyped = /(image_edit|image-edit|edit|edits|inpaint|mask|retouch)/.test(text);
+  const isVisionTyped = /(vision|visual|multimodal|image_input|image-input)/.test(text);
+  const isTextTyped = /(^|\b)(text|chat|llm|language|completion|completions)(\b|$)/.test(text);
+  const isUtilityModel = /(embedding|embed|rerank|ranker|moderation|whisper|tts|speech|transcrib|audio|sora|video)/.test(id);
+
+  if (
+    (/(^|[-_])o[134](?:[-_]|$)|gpt|gemini|claude|qwen|qwq|qvq|glm|deepseek|chat|instruct|command|llama|mistral|mixtral|moonshot|kimi|yi-|ernie|hunyuan|spark|doubao|minimax|abab|grok|reka|cohere|sonar/.test(id) ||
+      isTextTyped) &&
+    !isUtilityModel &&
+    !isImageTyped
+  ) {
     map.text = true;
     map.structured_output = true;
   }
 
-  if (/(vision|vl|4o|omni|gemini|multimodal|qwen-vl)/.test(id)) {
+  if (/(vision|vl|4o|omni|gemini|multimodal|qwen-vl|qvq|pixtral|llava|visual|claude-3|claude-sonnet|claude-opus|gpt-4\.1|gpt-5)/.test(id) || isVisionTyped) {
     map.vision = true;
     map.text = true;
     map.structured_output = true;
   }
 
-  if (/(image|imagen|flux|sdxl|stable-diffusion|banana|nano-banana|recraft)/.test(id)) {
+  if (/(image|imagen|flux|sdxl|stable-diffusion|stable.?image|banana|nano-banana|recraft|dall[-_ ]?e|seedream|jimeng|midjourney|mj-|ideogram|hidream|kolors|wanx|cogview|playground|leonardo)/.test(id) || isImageTyped) {
     map.image_gen = true;
     map.high_quality = true;
   }
 
-  if (/(edit|inpaint|mask)/.test(id)) {
+  if (/(edit|inpaint|mask|kontext|retouch|erase|remove.?background)/.test(id) || isImageEditTyped) {
+    map.image_edit = true;
+  }
+
+  if (isGptImageModel) {
+    map.image_gen = true;
+    map.image_edit = true;
+    map.high_quality = true;
+  }
+
+  if (isDallE2) {
     map.image_edit = true;
   }
 
@@ -52,7 +100,7 @@ export function detectModelCapabilities(modelId: string): CapabilityMap {
     map.high_quality = true;
   }
 
-  if (!Object.values(map).some(Boolean)) {
+  if (!Object.values(map).some(Boolean) && !isUtilityModel) {
     map.text = true;
   }
 
@@ -80,10 +128,10 @@ export function detectModelRoles(capabilities: CapabilityMap): ModelRoleMap {
 }
 
 export function normalizeDetectedModels(
-  models: Array<{ id: string; label?: string }>,
+  models: DetectedModelInput[],
 ): ModelDetectionResult[] {
   return models.map((model) => {
-    const capabilities = detectModelCapabilities(model.id);
+    const capabilities = detectModelCapabilities(model);
     return {
       modelId: model.id,
       label: model.label ?? model.id,

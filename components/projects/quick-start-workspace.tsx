@@ -114,7 +114,7 @@ export function QuickStartWorkspace() {
   };
 
   return (
-    <section className="mx-auto max-w-6xl space-y-8">
+    <section className="mx-auto flex min-h-[calc(100vh-11rem)] max-w-6xl flex-col space-y-8">
       <div className="space-y-4 text-center">
         <h1 className="text-4xl font-semibold tracking-[-0.06em] text-slate-950 dark:text-white md:text-5xl">
           上传产品图片
@@ -124,8 +124,8 @@ export function QuickStartWorkspace() {
         </p>
       </div>
 
-      <div className="rounded-[2rem] border border-slate-200 bg-white/84 p-6 shadow-soft backdrop-blur-xl dark:border-white/10 dark:bg-white/6 md:p-10">
-        <div className="rounded-[1.75rem] border border-dashed border-slate-300 bg-white/50 p-6 dark:border-white/10 dark:bg-white/[0.03] md:p-12">
+      <div className="flex min-h-0 flex-1 rounded-[2rem] border border-slate-200 bg-white/84 p-6 shadow-soft backdrop-blur-xl dark:border-white/10 dark:bg-white/6 md:p-10">
+        <div className="flex min-h-0 flex-1 flex-col rounded-[1.75rem] border border-dashed border-slate-300 bg-white/50 p-6 dark:border-white/10 dark:bg-white/[0.03] md:p-12">
           <Input
             id="quick-start-file"
             type="file"
@@ -136,7 +136,7 @@ export function QuickStartWorkspace() {
 
           <label
             htmlFor="quick-start-file"
-            className="flex min-h-[420px] cursor-pointer flex-col items-center justify-center rounded-[1.5rem] transition hover:bg-slate-50/80 dark:hover:bg-white/[0.04]"
+            className="flex min-h-[320px] flex-1 cursor-pointer flex-col items-center justify-center rounded-[1.5rem] transition hover:bg-slate-50/80 dark:hover:bg-white/[0.04]"
           >
             {previewUrl ? (
               <div className="flex flex-col items-center justify-center">
@@ -182,6 +182,7 @@ export function QuickStartWorkspace() {
           </div>
         </div>
       </div>
+
     </section>
   );
 }

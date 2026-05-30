@@ -1,7 +1,7 @@
 {
-  "name": "banana-mall",
+  "name": "ai-product-page-generator",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "description": "AI e-commerce detail page generation and editing workspace",
   "author": "MatrixInspire Inc",
   "main": "desktop/main.cjs",
@@ -61,7 +61,7 @@
   },
   "build": {
     "appId": "com.matrixinspire.bananamall",
-    "productName": "banana-mall",
+    "productName": "AI Product Page Generator",
     "asar": false,
     "asarUnpack": [
       ".next/standalone/node_modules/.prisma/**/*",
@@ -102,7 +102,7 @@
           ]
         }
       ],
-      "artifactName": "banana-mall-${version}.${ext}"
+      "artifactName": "ai-product-page-generator-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,

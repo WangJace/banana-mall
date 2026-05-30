@@ -16,8 +16,37 @@ function normalizeBaseUrl(baseUrl: string) {
   return baseUrl.replace(/\/+$/, "");
 }
 
+function hasOpenAiVersionSuffix(baseUrl: string) {
+  return /\/v\d+(?:beta)?$/i.test(normalizeBaseUrl(baseUrl));
+}
+
+function buildOpenAiCompatibleUrls(baseUrl: string, path: string) {
+  const normalized = normalizeBaseUrl(baseUrl);
+  const urls = [];
+
+  if (!hasOpenAiVersionSuffix(normalized)) {
+    urls.push(`${normalized}/v1${path}`);
+  }
+
+  urls.push(`${normalized}${path}`);
+
+  return [...new Set(urls)];
+}
+
+function baseUrlFromRequestUrl(url: string, path: string) {
+  return url.endsWith(path) ? normalizeBaseUrl(url.slice(0, -path.length)) : null;
+}
+
+function shouldRetryWithVersionedBase(status: number, body: string) {
+  return status === 404 || status === 405 || /not found|no route|cannot\s+(get|post)|unsupported endpoint/i.test(body);
+}
+
 function isGeminiImageModel(model: string) {
   return /gemini.*image|nano-banana|banana/i.test(model);
+}
+
+function isOpenAiGptImageModel(model: string) {
+  return /(?:^|[-_\s])gpt[-_\s]?image(?:[-_\s]?(?:\d+(?:\.\d+)?|mini))?|chatgpt-image/i.test(model);
 }
 
 function deriveGoogleBaseUrl(baseUrl: string) {
@@ -87,6 +116,13 @@ function dataUrlToInlineData(dataUrl: string) {
   };
 }
 
+function dataUrlToBlob(dataUrl: string) {
+  const inlineData = dataUrlToInlineData(dataUrl);
+  return new Blob([Buffer.from(inlineData.data, "base64")], {
+    type: inlineData.mimeType,
+  });
+}
+
 function extractTextContent(payload: unknown) {
   const message = (payload as { choices?: Array<{ message?: { content?: unknown } }> })?.choices?.[0]?.message?.content;
 
@@ -138,6 +174,20 @@ function tryParseJsonBody(body: RequestInit["body"]) {
   }
 }
 
+function tryReadBodyModel(body: RequestInit["body"]) {
+  const jsonPayload = tryParseJsonBody(body);
+  if (typeof jsonPayload?.model === "string") {
+    return jsonPayload.model;
+  }
+
+  if (typeof FormData !== "undefined" && body instanceof FormData) {
+    const model = body.get("model");
+    return typeof model === "string" ? model : null;
+  }
+
+  return null;
+}
+
 function inferModelFromEndpoint(url: string, bodyPayload?: Record<string, unknown> | null) {
   if (typeof bodyPayload?.model === "string") {
     return bodyPayload.model;
@@ -158,6 +208,19 @@ function readMonitorContext(input?: AiMonitorContext) {
 function tryParseStructuredPayload<T>(raw: string, schema: z.ZodType<T>) {
   const parsedJson = JSON.parse(parseJsonBlock(raw));
   return schema.parse(parsedJson);
+}
+
+function isUnsupportedTemperatureError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return /temperature/i.test(error.message) && /unsupported|does not support|only the default|unsupported_value/i.test(error.message);
+}
+
+function omitTemperature<T extends Record<string, unknown>>(body: T) {
+  const { temperature: _temperature, ...rest } = body;
+  return rest;
 }
 
 function buildMessages(input: TextRequest | StructuredRequest<unknown>): ChatMessage[] {
@@ -247,7 +310,27 @@ function classifyProbeResult(status: number, body: string) {
 }
 
 export class OpenAICompatibleAdapter implements ProviderAdapter {
+  private preferredBaseUrl: string | null = null;
+
   constructor(private readonly baseUrl: string, private readonly apiKey: string) {}
+
+  private buildRequestUrls(path: string) {
+    const urls = buildOpenAiCompatibleUrls(this.baseUrl, path);
+    if (!this.preferredBaseUrl) {
+      return urls;
+    }
+
+    const preferredUrl = `${this.preferredBaseUrl}${path}`;
+    return [preferredUrl, ...urls.filter((url) => url !== preferredUrl)];
+  }
+
+  private rememberCompatibleBaseUrl(url: string, path: string, response: { ok: boolean; status: number; body: string }) {
+    if (!response.ok && shouldRetryWithVersionedBase(response.status, response.body)) {
+      return;
+    }
+
+    this.preferredBaseUrl = baseUrlFromRequestUrl(url, path) ?? this.preferredBaseUrl;
+  }
 
   private async fetchRaw(
     url: string,
@@ -264,7 +347,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     const startedAt = Date.now();
     const method = init?.method ?? "GET";
     const bodyPayload = tryParseJsonBody(init?.body);
-    const model = inferModelFromEndpoint(url, bodyPayload);
+    const model = tryReadBodyModel(init?.body) ?? inferModelFromEndpoint(url, bodyPayload);
     const category = inferCategory(url, bodyPayload);
     const requestBytes = typeof init?.body === "string" ? Buffer.byteLength(init.body) : 0;
 
@@ -272,7 +355,9 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       const response = await fetch(url, {
         ...init,
         headers: {
-          "Content-Type": "application/json",
+          ...(typeof FormData !== "undefined" && init?.body instanceof FormData
+            ? {}
+            : { "Content-Type": "application/json" }),
           Authorization: `Bearer ${this.apiKey}`,
           ...(extraHeaders ?? {}),
           ...(init?.headers ?? {}),
@@ -343,11 +428,186 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       suppressUsageLog?: boolean;
     },
   ) {
-    return this.fetchRaw(`${normalizeBaseUrl(this.baseUrl)}${path}`, init, undefined, timeoutMs, monitor, options);
+    const urls = this.buildRequestUrls(path);
+    if (urls.length === 1 || options?.suppressUsageLog) {
+      const response = await this.fetchRaw(urls[0], init, undefined, timeoutMs, monitor, options);
+      this.rememberCompatibleBaseUrl(urls[0], path, response);
+      return response;
+    }
+
+    const startedAt = Date.now();
+    const method = init?.method ?? "GET";
+    const bodyPayload = tryParseJsonBody(init?.body);
+    const requestBytes = typeof init?.body === "string" ? Buffer.byteLength(init.body) : 0;
+    const collapsedAttempts: Array<{
+      endpoint: string;
+      statusCode: number;
+      success: boolean;
+      errorMessage: string | null;
+    }> = [];
+    let lastResponse: Awaited<ReturnType<typeof this.fetchRaw>> | null = null;
+    let lastUrl = urls[0];
+    let lastError: unknown = null;
+
+    for (const url of urls) {
+      try {
+        const response = await this.fetchRaw(
+          url,
+          init,
+          undefined,
+          timeoutMs,
+          monitor,
+          {
+            ...options,
+            suppressUsageLog: true,
+          },
+        );
+        lastResponse = response;
+        lastUrl = url;
+        collapsedAttempts.push({
+          endpoint: url,
+          statusCode: response.status,
+          success: response.ok,
+          errorMessage: response.ok ? null : response.body.slice(0, 1000),
+        });
+
+        this.rememberCompatibleBaseUrl(url, path, response);
+
+        if (response.ok || !shouldRetryWithVersionedBase(response.status, response.body)) {
+          break;
+        }
+      } catch (error) {
+        lastError = error;
+        lastUrl = url;
+        collapsedAttempts.push({
+          endpoint: url,
+          statusCode: 0,
+          success: false,
+          errorMessage: error instanceof Error ? error.message : "Unknown request failure",
+        });
+        break;
+      }
+    }
+
+    const finalResponse =
+      lastError && (!lastResponse || shouldRetryWithVersionedBase(lastResponse.status, lastResponse.body))
+        ? {
+            ok: false,
+            status: 0,
+            body: lastError instanceof Error ? lastError.message : "Unknown request failure",
+            durationMs: Date.now() - startedAt,
+          }
+        : lastResponse ?? {
+        ok: false,
+        status: 0,
+        body: "",
+        durationMs: Date.now() - startedAt,
+      };
+    const retrySummary =
+      collapsedAttempts.length > 1
+        ? collapsedAttempts
+            .filter((item) => !item.success)
+            .map((item) => `${item.endpoint} -> ${item.statusCode}: ${item.errorMessage ?? "Unknown error"}`)
+            .join(" | ")
+        : null;
+
+    await logApiUsage({
+      providerBaseUrl: normalizeBaseUrl(this.baseUrl),
+      endpoint: urls[0],
+      finalEndpoint: lastUrl,
+      method,
+      model: tryReadBodyModel(init?.body) ?? inferModelFromEndpoint(lastUrl, bodyPayload),
+      ...readMonitorContext(monitor),
+      category: inferCategory(lastUrl, bodyPayload),
+      statusCode: finalResponse.status,
+      durationMs: Date.now() - startedAt,
+      success: finalResponse.ok,
+      requestBytes,
+      responseBytes: Buffer.byteLength(finalResponse.body),
+      responseBody: finalResponse.body,
+      attemptCount: collapsedAttempts.length,
+      retrySummary,
+      collapsedAttempts,
+      errorMessage: finalResponse.ok
+        ? null
+        : finalResponse.body.slice(0, 1000) ||
+          (lastError instanceof Error ? lastError.message : "Unknown request failure"),
+    });
+
+    if (!lastResponse && lastError) {
+      if ((lastError as Error)?.name === "AbortError") {
+        throw new Error(`Provider request timed out after ${timeoutMs ?? 15000}ms: ${lastUrl}`);
+      }
+      throw lastError;
+    }
+
+    return finalResponse;
   }
 
   private async requestJson<T>(path: string, init?: RequestInit, timeoutMs?: number, monitor?: AiMonitorContext) {
     const response = await this.requestRaw(path, init, timeoutMs, monitor);
+
+    if (!response.ok) {
+      throw new Error(`Provider request failed (${response.status}): ${response.body}`);
+    }
+
+    return JSON.parse(response.body) as T;
+  }
+
+  private async requestChatCompletion<T>(
+    body: Record<string, unknown>,
+    timeoutMs?: number,
+    monitor?: AiMonitorContext,
+  ) {
+    try {
+      return await this.requestJson<T>("/chat/completions", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }, timeoutMs, monitor);
+    } catch (error) {
+      if (!("temperature" in body) || !isUnsupportedTemperatureError(error)) {
+        throw error;
+      }
+
+      return this.requestJson<T>("/chat/completions", {
+        method: "POST",
+        body: JSON.stringify(omitTemperature(body)),
+      }, timeoutMs, monitor);
+    }
+  }
+
+  private async requestMultipartJson<T>(
+    path: string,
+    fields: Record<string, string | number | boolean | null | undefined>,
+    images: string[],
+    options?: {
+      imageFieldName?: "image" | "image[]";
+      timeoutMs?: number;
+      monitor?: AiMonitorContext;
+    },
+  ) {
+    const form = new FormData();
+
+    for (const [key, value] of Object.entries(fields)) {
+      if (value !== null && value !== undefined) {
+        form.append(key, String(value));
+      }
+    }
+
+    const imageFieldName = options?.imageFieldName ?? (images.length > 1 ? "image[]" : "image");
+    images.forEach((image, index) => {
+      form.append(imageFieldName, dataUrlToBlob(image), `image-${index + 1}.png`);
+    });
+
+    const response = await this.requestRaw(
+      path,
+      {
+        method: "POST",
+        body: form,
+      },
+      options?.timeoutMs,
+      options?.monitor,
+    );
 
     if (!response.ok) {
       throw new Error(`Provider request failed (${response.status}): ${response.body}`);
@@ -481,9 +741,8 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
   }
 
   private async repairStructuredOutput<T>(input: StructuredRequest<T>, raw: string, reason: string) {
-    const payload = await this.requestJson("/chat/completions", {
-      method: "POST",
-      body: JSON.stringify({
+    const payload = await this.requestChatCompletion(
+      {
         model: input.model,
         temperature: 0,
         response_format: { type: "json_object" },
@@ -504,8 +763,9 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
             ].join("\n"),
           },
         ],
-      }),
-    }, Math.min(input.timeoutMs ?? 60000, 45000));
+      },
+      Math.min(input.timeoutMs ?? 60000, 45000),
+    );
 
     const repairedRaw = extractTextContent(payload);
     return {
@@ -592,20 +852,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     };
   }
 
-  async probeImageEndpointSupport(model: string) {
-    if (isGeminiImageModel(model)) {
-      try {
-        return await this.probeGeminiImageSupport(model);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Unknown Google protocol probe error";
-        return {
-          imageGeneration: "unknown" as const,
-          imageEdit: "unknown" as const,
-          note: message,
-        };
-      }
-    }
-
+  private async probeOpenAiGptImageSupport(model: string) {
     const tinyTransparentPixel =
       "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9pW4xQAAAABJRU5ErkJggg==";
 
@@ -626,28 +873,45 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       },
     );
 
-    const editProbe = await this.requestRaw(
-      "/images/edits",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          model,
-          prompt: "probe",
-          size: "1024x1024",
-          images: [{ image_url: tinyTransparentPixel }],
-        }),
-      },
-      5000,
-      undefined,
-      {
-        suppressUsageLog: true,
-      },
-    );
+    let editProbe;
+    try {
+      const form = new FormData();
+      form.append("model", model);
+      form.append("prompt", "probe");
+      form.append("size", "1024x1024");
+      form.append("image", dataUrlToBlob(tinyTransparentPixel), "probe.png");
+
+      editProbe = await this.requestRaw(
+        "/images/edits",
+        {
+          method: "POST",
+          body: form,
+        },
+        5000,
+        undefined,
+        {
+          suppressUsageLog: true,
+        },
+      );
+    } catch (error) {
+      editProbe = {
+        status: 0,
+        body: error instanceof Error ? error.message : "Unknown multipart image edit probe error",
+      };
+    }
 
     return {
       imageGeneration: classifyProbeResult(generationProbe.status, generationProbe.body),
       imageEdit: classifyProbeResult(editProbe.status, editProbe.body),
       note: [generationProbe.body, editProbe.body].filter(Boolean).join(" | ").slice(0, 1000),
+    };
+  }
+
+  async probeImageEndpointSupport(model: string) {
+    return {
+      imageGeneration: "unknown" as const,
+      imageEdit: "unknown" as const,
+      note: `已跳过 ${model} 的真实图像接口探测，避免在校验/发现阶段消耗图像额度。`,
     };
   }
 
@@ -660,24 +924,32 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
   }
 
   async listModels() {
-    const payload = await this.requestJson<{ data?: Array<{ id: string; label?: string }> }>("/models", {
+    const payload = await this.requestJson<{ data?: Array<Record<string, unknown> & { id: string; label?: string; name?: string }> }>("/models", {
       method: "GET",
     });
     return (payload.data ?? []).map((item) => ({
       id: item.id,
-      label: item.label ?? item.id,
+      label: item.label ?? item.name ?? item.id,
+      type: typeof item.type === "string" ? item.type : typeof item.category === "string" ? item.category : null,
+      category: typeof item.category === "string" ? item.category : typeof item.type === "string" ? item.type : null,
+      modalities: Array.isArray(item.modalities)
+        ? item.modalities.filter((entry): entry is string => typeof entry === "string")
+        : Array.isArray(item.capabilities)
+          ? item.capabilities.filter((entry): entry is string => typeof entry === "string")
+          : undefined,
     }));
   }
 
   async generateText(input: TextRequest) {
-    const payload = await this.requestJson("/chat/completions", {
-      method: "POST",
-      body: JSON.stringify({
+    const payload = await this.requestChatCompletion(
+      {
         model: input.model,
         messages: buildMessages(input),
         temperature: 0.4,
-      }),
-    }, input.timeoutMs ?? 60000, input.monitor);
+      },
+      input.timeoutMs ?? 60000,
+      input.monitor,
+    );
 
     return {
       text: extractTextContent(payload),
@@ -685,15 +957,16 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
   }
 
   async generateStructured<T>(input: StructuredRequest<T>) {
-    const payload = await this.requestJson("/chat/completions", {
-      method: "POST",
-      body: JSON.stringify({
+    const payload = await this.requestChatCompletion(
+      {
         model: input.model,
         messages: buildMessages(input),
         temperature: 0.2,
         response_format: { type: "json_object" },
-      }),
-    }, input.timeoutMs ?? 60000, input.monitor);
+      },
+      input.timeoutMs ?? 60000,
+      input.monitor,
+    );
 
     const raw = extractTextContent(payload);
 
@@ -741,6 +1014,40 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     return extractGoogleImageResult(payload);
   }
 
+  private async generateOpenAiGptImageWithReferences(input: {
+    model: string;
+    prompt: string;
+    images: string[];
+    size?: string;
+    aspectRatio?: "1:1" | "3:4" | "9:16";
+    monitor?: AiMonitorContext;
+  }) {
+    const fields = {
+      model: input.model,
+      prompt: input.prompt,
+      size: resolveOpenAiSize(input),
+    };
+    const errors: string[] = [];
+
+    for (const imageFieldName of ["image[]", "image"] as const) {
+      try {
+        const payload = await this.requestMultipartJson<{
+          data?: Array<{ url?: string; b64_json?: string; revised_prompt?: string }>;
+        }>("/images/edits", fields, input.images, {
+          imageFieldName,
+          timeoutMs: 90000,
+          monitor: input.monitor,
+        });
+
+        return extractImageResult(payload);
+      } catch (error) {
+        errors.push(error instanceof Error ? error.message : "Unknown GPT Image multipart error");
+      }
+    }
+
+    throw new Error(`GPT Image multipart request failed: ${errors.join(" | ")}`);
+  }
+
   async generateImage(input: ImageGenerationRequest): Promise<ImageGenerationResult> {
     const referenceImages = input.referenceImages ?? [];
     let googleProtocolError: unknown = null;
@@ -768,6 +1075,22 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       if (googleProtocolError instanceof Error) {
         referenceErrors.push(`Google protocol failed: ${googleProtocolError.message}`);
       }
+
+      if (isOpenAiGptImageModel(input.model)) {
+        try {
+          return await this.generateOpenAiGptImageWithReferences({
+            model: input.model,
+            prompt: input.prompt,
+            images: referenceImages,
+            size: input.size,
+            aspectRatio: input.aspectRatio,
+            monitor: input.monitor,
+          });
+        } catch (error) {
+          referenceErrors.push(error instanceof Error ? error.message : "Unknown GPT Image reference generation error");
+        }
+      }
+
       const imageRefs = toImageRefs(referenceImages);
 
       for (const attempt of [
@@ -871,6 +1194,21 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       } catch (error) {
         googleProtocolError = error;
         // Fall through to compatibility attempts for providers that proxy Gemini image models via OpenAI image APIs.
+      }
+    }
+
+    if (isOpenAiGptImageModel(input.model)) {
+      try {
+        return await this.generateOpenAiGptImageWithReferences({
+          model: input.model,
+          prompt: input.prompt,
+          images: [input.image, ...(input.referenceImages ?? [])],
+          size: input.size,
+          aspectRatio: input.aspectRatio,
+          monitor: input.monitor,
+        });
+      } catch {
+        // Fall through to JSON compatibility attempts for third-party gateways.
       }
     }
 

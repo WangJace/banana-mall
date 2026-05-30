@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Loader2, Sparkles, Star, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowRight, ArrowUp, Loader2, Sparkles, Star, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { NoticeCard } from "@/components/shared/notice-card";
@@ -375,16 +375,17 @@ export function AnalysisWorkspace({
                   </div>
                 ))}
 
-                <div className="flex flex-wrap gap-3">
-                  <Button onClick={saveAnalysis} disabled={saving}>
+                <div className="flex flex-col gap-3 rounded-3xl border border-slate-200 bg-slate-50/80 p-4 dark:border-white/10 dark:bg-white/[0.04] sm:flex-row sm:items-center sm:justify-between">
+                  <Button onClick={saveAnalysis} disabled={saving} variant="outline">
                     {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                     保存分析结果
                   </Button>
                   <Link
                     href={`/projects/${project.id}/planner`}
-                    className="inline-flex h-10 items-center justify-center rounded-xl border border-border bg-white px-4 text-sm font-medium text-slate-700 transition-colors hover:bg-muted hover:text-slate-900 dark:border-white/10 dark:bg-[#141416] dark:text-slate-100 dark:hover:border-white/20 dark:hover:bg-white/8 dark:hover:text-white"
+                    className="inline-flex h-12 items-center justify-center rounded-2xl bg-slate-950 px-6 text-sm font-semibold text-white shadow-[0_18px_34px_-18px_rgba(15,23,42,0.65)] transition hover:-translate-y-0.5 hover:bg-black hover:shadow-[0_22px_40px_-20px_rgba(15,23,42,0.75)] dark:bg-white dark:text-black dark:hover:bg-slate-100"
                   >
                     进入页面规划
+                    <ArrowRight className="ml-2 h-4 w-4" />
                   </Link>
                 </div>
               </>

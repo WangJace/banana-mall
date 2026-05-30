@@ -111,7 +111,7 @@ export default function ProviderSettingsPageClient() {
       <PageHeader
         eyebrow="模型服务配置"
         title="Provider 与模型配置中心"
-        description="页面会优先展示已保存的历史服务与模型快照，方便你快速切换。需要从当前代理商重新发现模型并探测能力时，再点击“发现模型并探测”。"
+        description="页面会优先展示已保存的历史服务与模型快照，方便你快速切换。需要从当前代理商重新发现模型并识别能力时，再点击“发现模型并识别能力”。"
       />
 
       {loading ? (

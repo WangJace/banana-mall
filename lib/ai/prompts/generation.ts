@@ -48,6 +48,15 @@ function buildTargetLanguageInstruction(contentLanguage: ContentLanguage) {
   ].join(" ");
 }
 
+function buildPhysicalRealityInstruction() {
+  return [
+    "Respect product physics and product-specific mechanical logic.",
+    "Infer how the product actually works from the uploaded image and section goal: cable exit points, vents, nozzles, hinges, openings, drawers, buttons, handles, gravity, shadows, reflections, support surfaces, airflow, liquid flow, and user interaction direction.",
+    "Do not create impossible physical effects: reversed airflow, cords disappearing into furniture, floating unsupported products, hands passing through solid parts, liquids flowing upward, disconnected shadows, impossible reflections, text crossing through product geometry, or parts bending in a way the material cannot.",
+    "For hair dryers specifically, airflow must leave the front nozzle, the rear intake must not emit wind, and the power cord must connect naturally from the handle/base instead of merging into a desk or wall.",
+  ].join(" ");
+}
+
 export function buildSectionImagePrompt(
   section: PageSection,
   referenceAssets: ProductAsset[] = [],
@@ -65,6 +74,7 @@ export function buildSectionImagePrompt(
     buildMainImageInstruction(referenceAssets),
     buildAspectInstruction(aspectRatio),
     buildTargetLanguageInstruction(contentLanguage),
+    buildPhysicalRealityInstruction(),
     "Generate one high-conversion mobile e-commerce visual for this section.",
     "The image should emphasize product clarity, composition hierarchy, material texture, and marketplace aesthetics.",
     "The headline, selling points, supporting copy, and CTA should be visually designed inside the image rather than left for later DOM text insertion.",

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { FolderKanban, GalleryVerticalEnd, History, Settings2 } from "lucide-react";
+import { BookOpenText, FolderKanban, GalleryVerticalEnd, History, Images, Settings2 } from "lucide-react";
 
 import { ApiUsageIndicator } from "@/components/layout/api-usage-indicator";
 import { FloatingThemeToggle } from "@/components/layout/theme-toggle";
@@ -8,7 +8,9 @@ import { cn } from "@/lib/utils";
 
 const navItems = [
   { href: "/", label: "快速开始", icon: FolderKanban },
+  { href: "/batch-create", label: "批量创建", icon: Images },
   { href: "/history", label: "历史记录", icon: History },
+  { href: "/xiaohongshu/plan", label: "小红书图文", icon: BookOpenText },
   { href: "/projects/new", label: "高级创建", icon: GalleryVerticalEnd },
 ];
 
@@ -18,14 +20,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div className="fixed bottom-4 left-4 z-[60]">
         <FloatingThemeToggle />
       </div>
-      <div className="mx-auto flex min-h-screen max-w-[1600px] gap-6 px-4 py-5 md:px-6">
-        <aside className="hidden w-72 shrink-0 rounded-[2rem] border border-white/70 bg-white/76 p-5 shadow-soft backdrop-blur-2xl dark:border-white/10 dark:bg-[#0b0b0c]/88 dark:shadow-[0_24px_60px_-38px_rgba(0,0,0,0.72)] md:flex md:flex-col">
+      <div className="mx-auto min-h-screen max-w-[1600px] px-4 py-5 md:px-6">
+        <aside
+          className="scrollbar-hidden fixed top-5 z-40 hidden h-[calc(100vh-2.5rem)] w-72 overflow-y-auto rounded-[2rem] border border-white/70 bg-white/76 p-5 shadow-soft backdrop-blur-2xl dark:border-white/10 dark:bg-[#0b0b0c]/88 dark:shadow-[0_24px_60px_-38px_rgba(0,0,0,0.72)] md:flex md:flex-col"
+          style={{ left: "max(1.5rem, calc((100vw - 1600px) / 2 + 1.5rem))" }}
+        >
           <Link
             href="/"
             className="flex items-center gap-3 rounded-2xl border border-white/85 bg-[linear-gradient(180deg,rgba(255,255,255,0.92),rgba(245,245,245,0.82))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] dark:border-white/10 dark:bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0.02))] dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
           >
-            <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-black/10 bg-black text-base font-semibold tracking-[-0.06em] text-white dark:border-white/10 dark:bg-white dark:text-black">
-              M
+            <div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-2xl border border-black/10 bg-white shadow-sm dark:border-white/10 dark:bg-white">
+              <img src="/brand-icon.ico" alt="banana-mall" className="h-full w-full object-cover" />
             </div>
             <div>
               <p className="text-lg font-semibold tracking-[-0.03em] text-slate-950 dark:text-white">banana-mall</p>
@@ -63,7 +68,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   </p>
                 </div>
                 <div className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-[11px] font-medium text-slate-500 dark:border-white/10 dark:bg-white/8 dark:text-slate-300">
-                  V1
+                  V2
                 </div>
               </div>
 
@@ -87,7 +92,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </aside>
 
-        <main className="flex-1 rounded-[2rem] border border-white/80 bg-white/74 p-5 shadow-soft backdrop-blur-2xl dark:border-white/10 dark:bg-[#0f0f10]/82 dark:shadow-[0_24px_60px_-38px_rgba(0,0,0,0.78)] md:p-8">
+        <main className="min-w-0 rounded-[2rem] border border-white/80 bg-white/74 p-5 shadow-soft backdrop-blur-2xl dark:border-white/10 dark:bg-[#0f0f10]/82 dark:shadow-[0_24px_60px_-38px_rgba(0,0,0,0.78)] md:ml-[19.5rem] md:p-8">
           <div className="mb-6 flex flex-wrap items-center justify-end gap-3">
             <Link
               href="/monitor/usage"

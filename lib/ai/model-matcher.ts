@@ -1,11 +1,18 @@
 import type { ModelDetectionResult } from "@/types/domain";
 
-function findFirst(models: ModelDetectionResult[], predicate: (model: ModelDetectionResult) => boolean) {
-  return models.find(predicate) ?? null;
+function sortByScore(
+  models: ModelDetectionResult[],
+  score: (model: ModelDetectionResult) => number,
+) {
+  return [...models].sort((left, right) => {
+    const diff = score(right) - score(left);
+    if (diff !== 0) return diff;
+    return left.modelId.localeCompare(right.modelId);
+  });
 }
 
-function isStableAnalysisCandidate(modelId: string) {
-  return !/(preview|experimental|beta|test|lite|flash-lite|image|imagen|recraft|flux|canvas)/i.test(modelId);
+function isPreviewOrTest(modelId: string) {
+  return /(^|[-_])(?:preview|experimental|beta|test|deprecated|legacy)(?:[-_]|$)/i.test(modelId);
 }
 
 function isStableImageCandidate(modelId: string) {
@@ -20,71 +27,140 @@ function hasRealImageEdit(model: ModelDetectionResult) {
   return model.capabilities.image_edit && model.capabilities.real_image_edit !== false;
 }
 
-export function recommendDefaultModels(models: ModelDetectionResult[]) {
-  const stableVisionTextModels = models.filter(
-    (item) => item.capabilities.text && item.capabilities.vision && isStableAnalysisCandidate(item.modelId),
+function isImageProductionModel(model: ModelDetectionResult) {
+  return Boolean(model.capabilities.image_gen || model.capabilities.image_edit);
+}
+
+function isTextGenerationCandidate(model: ModelDetectionResult) {
+  return Boolean(model.capabilities.text && !isImageProductionModel(model));
+}
+
+function isVisionCandidate(model: ModelDetectionResult) {
+  return Boolean(model.capabilities.vision && !isImageProductionModel(model));
+}
+
+function normalizeModelId(modelId: string) {
+  return modelId.toLowerCase().replace(/[^a-z0-9.]+/g, "");
+}
+
+function findPreferredModel(models: ModelDetectionResult[], preferredIds: string[]) {
+  const normalizedPreferences = preferredIds.map(normalizeModelId);
+  return models.find((model) => normalizedPreferences.includes(normalizeModelId(model.modelId))) ?? null;
+}
+
+function findGptImage2Model(models: ModelDetectionResult[]) {
+  return (
+    findPreferredModel(models, ["gpt-image-2", "gptimage2"]) ??
+    sortByScore(
+      models.filter((model) => /^gpt[-_\s]?image[-_\s]?2(?:[-_\s]|$)/i.test(model.modelId)),
+      (model) => (model.modelId.toLowerCase() === "gpt-image-2" ? 100 : 90),
+    )[0] ??
+    null
   );
-  const anyVisionTextModels = models.filter((item) => item.capabilities.text && item.capabilities.vision);
-  const stableImageModels = models.filter(
+}
+
+const COST_EFFECTIVE_TEXT_MODELS = [
+  "gpt-5-mini",
+  "gpt-5-nano",
+  "gpt-4.1-mini",
+  "gpt-4.1-nano",
+  "gpt-4o-mini",
+  "gpt-5.4-mini",
+  "gemini-2.5-flash",
+  "gemini-2.0-flash-001",
+  "gemini-2.0-flash",
+];
+
+function findCostEffectiveTextModel(models: ModelDetectionResult[]) {
+  return findPreferredModel(models, COST_EFFECTIVE_TEXT_MODELS);
+}
+
+function scoreTextCandidate(model: ModelDetectionResult) {
+  const id = model.modelId.toLowerCase();
+  let score = 0;
+
+  if (COST_EFFECTIVE_TEXT_MODELS.map(normalizeModelId).includes(normalizeModelId(id))) score += 80;
+  if (/(mini|nano|flash|lite|turbo)/i.test(id)) score += 12;
+  if (model.capabilities.text) score += 20;
+  if (model.capabilities.structured_output) score += 8;
+  if (model.capabilities.vision) score += 6;
+  if (model.capabilities.high_quality) score += 5;
+  if (model.capabilities.fast) score += 2;
+  if (model.capabilities.cheap) score += 8;
+  if (/(pro|max|opus|sonnet|reasoner|plus|5|4\.1|4-)/i.test(id)) score += 3;
+  if (/gpt-5\.5|gpt-5\.4-pro|gpt-5\.5-pro|pro|max/i.test(id)) score -= 18;
+  if (isPreviewOrTest(id)) score -= 8;
+  if (/(image|imagen|dall|flux|recraft|seedream|jimeng|midjourney|ideogram|cogview|audio|tts|speech|embedding|rerank|moderation)/i.test(id)) {
+    score -= 12;
+  }
+
+  return score;
+}
+
+function scoreImageCandidate(model: ModelDetectionResult) {
+  const id = model.modelId.toLowerCase();
+  let score = 0;
+
+  if (normalizeModelId(id) === "gptimage2") score += 100;
+  if (/^gpt[-_\s]?image[-_\s]?2(?:[-_\s]|$)/i.test(id)) score += 90;
+  if (hasRealImageGeneration(model)) score += 30;
+  if (hasRealImageEdit(model)) score += 8;
+  if (model.capabilities.high_quality) score += 5;
+  if (/(gpt[-_\s]?image|chatgpt-image|banana|nano-banana|imagen|dall[-_\s]?e|flux|recraft|seedream|jimeng|midjourney|ideogram|hidream|kolors|wanx|cogview)/i.test(id)) {
+    score += 10;
+  }
+  if (/(pro|max|ultra|quality)/i.test(id)) score += 3;
+  if (/(mini|flash|lite)/i.test(id)) score += 1;
+  if (isPreviewOrTest(id)) score -= 6;
+
+  return score;
+}
+
+export function recommendDefaultModels(models: ModelDetectionResult[]) {
+  const visionModels = models.filter(isVisionCandidate);
+  const textModels = models.filter(isTextGenerationCandidate);
+  const stableImageGenerationModels = models.filter(
     (item) => hasRealImageGeneration(item) && isStableImageCandidate(item.modelId),
   );
-  const anyImageModels = models.filter((item) => hasRealImageGeneration(item));
+  const imageGenerationModels = models.filter((item) => hasRealImageGeneration(item));
+  const stableImageEditModels = models.filter(
+    (item) => hasRealImageEdit(item) && isStableImageCandidate(item.modelId),
+  );
+  const imageEditModels = models.filter((item) => hasRealImageEdit(item));
 
   const analysisModel =
-    findFirst(stableVisionTextModels, (item) => item.modelId.toLowerCase().includes("gemini")) ??
-    findFirst(stableVisionTextModels, (item) => item.modelId.toLowerCase().includes("gpt-4o")) ??
-    stableVisionTextModels[0] ??
-    findFirst(anyVisionTextModels, (item) => item.modelId.toLowerCase().includes("gemini")) ??
-    anyVisionTextModels[0] ??
-    findFirst(models, (item) => item.capabilities.text);
+    findCostEffectiveTextModel(visionModels) ??
+    sortByScore(visionModels.filter((item) => !isPreviewOrTest(item.modelId)), scoreTextCandidate)[0] ??
+    sortByScore(visionModels, scoreTextCandidate)[0] ??
+    null;
 
   const planningModel =
-    findFirst(
-      models,
-      (item) =>
-        item.capabilities.text &&
-        item.capabilities.structured_output &&
-        item.modelId.toLowerCase().includes("gemini") &&
-        !/(preview|experimental|beta|test)/i.test(item.modelId),
-    ) ??
-    findFirst(
-      models,
-      (item) =>
-        item.capabilities.text &&
-        item.capabilities.structured_output &&
-        !/(preview|experimental|beta|test)/i.test(item.modelId),
-    ) ??
-    analysisModel;
+    findCostEffectiveTextModel(textModels) ??
+    sortByScore(textModels.filter((item) => item.capabilities.structured_output && !isPreviewOrTest(item.modelId)), scoreTextCandidate)[0] ??
+    sortByScore(textModels.filter((item) => !isPreviewOrTest(item.modelId)), scoreTextCandidate)[0] ??
+    sortByScore(textModels, scoreTextCandidate)[0] ??
+    null;
 
   const heroImageModel =
-    findFirst(
-      stableImageModels,
-      (item) => /(banana|nano-banana|nano banana|imagen|recraft|flux)/i.test(item.modelId),
-    ) ??
-    findFirst(stableImageModels, (item) => /gemini/i.test(item.modelId)) ??
-    findFirst(stableImageModels, (item) => item.capabilities.high_quality) ??
-    stableImageModels[0] ??
-    findFirst(
-      anyImageModels,
-      (item) => /(banana|nano-banana|nano banana|imagen|recraft|flux)/i.test(item.modelId),
-    ) ??
-    findFirst(anyImageModels, (item) => /gemini/i.test(item.modelId)) ??
-    anyImageModels[0] ??
+    findGptImage2Model(imageGenerationModels) ??
+    sortByScore(stableImageGenerationModels, scoreImageCandidate)[0] ??
+    sortByScore(imageGenerationModels, scoreImageCandidate)[0] ??
     null;
 
   const detailImageModel =
-    findFirst(
-      stableImageModels,
-      (item) => /(banana|imagen|flux|detail)/i.test(item.modelId),
-    ) ??
-    findFirst(stableImageModels, (item) => /gemini/i.test(item.modelId)) ??
+    findGptImage2Model(imageGenerationModels) ??
+    sortByScore(
+      stableImageGenerationModels.filter((item) => /detail|pro|max|ultra|quality|gpt[-_\s]?image|imagen|flux|dall[-_\s]?e|seedream|jimeng|midjourney|ideogram|cogview/i.test(item.modelId)),
+      scoreImageCandidate,
+    )[0] ??
+    sortByScore(stableImageGenerationModels, scoreImageCandidate)[0] ??
     heroImageModel;
 
   const imageEditModel =
-    findFirst(models, (item) => hasRealImageEdit(item) && isStableImageCandidate(item.modelId)) ??
-    findFirst(models, (item) => hasRealImageEdit(item)) ??
-    detailImageModel ??
-    heroImageModel;
+    findGptImage2Model(imageEditModels) ??
+    sortByScore(stableImageEditModels, scoreImageCandidate)[0] ??
+    sortByScore(imageEditModels, scoreImageCandidate)[0] ??
+    null;
 
   return {
     analysisModelId: analysisModel?.modelId ?? null,

@@ -4,26 +4,15 @@ import { useEffect, useMemo, useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
-import {
-  AlertTriangle,
-  CheckCircle2,
-  ChevronsUpDown,
-  CopyPlus,
-  History,
-  Loader2,
-  PlugZap,
-  Save,
-  Search,
-} from "lucide-react";
+import { ChevronsUpDown, CopyPlus, History, Loader2, PlugZap, Save, Search } from "lucide-react";
 import { z } from "zod";
 
-import { providerSaveSchema } from "@/lib/validations/provider";
-import { capabilityLabels } from "@/types/domain";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { providerSaveSchema } from "@/lib/validations/provider";
 
 type ProviderFormValues = z.input<typeof providerSaveSchema>;
 
@@ -72,13 +61,19 @@ type DefaultAssignments = {
 };
 
 type GenericModelRecord = Record<string, any>;
+type ModelTypeKey = "text" | "vision" | "image_gen" | "image_edit";
+type ModelOptionGroup = {
+  key: string;
+  label: string;
+  description: string;
+  models: GenericModelRecord[];
+};
 
-const roleFieldLabels: Array<[keyof DefaultAssignments, string]> = [
-  ["analysisModelId", "商品分析模型"],
-  ["planningModelId", "页面规划模型"],
-  ["heroImageModelId", "头图生成模型"],
-  ["detailImageModelId", "详情图生成模型"],
-  ["imageEditModelId", "图像编辑模型"],
+const modelTypeFields: Array<{ key: ModelTypeKey; label: string }> = [
+  { key: "text", label: "文本生成模型" },
+  { key: "vision", label: "图像识别模型" },
+  { key: "image_gen", label: "图像生成模型" },
+  { key: "image_edit", label: "图像编辑模型" },
 ];
 
 function buildDefaults(provider: ProviderRecord | null): DefaultAssignments {
@@ -91,39 +86,323 @@ function buildDefaults(provider: ProviderRecord | null): DefaultAssignments {
   };
 }
 
-function getEndpointBadge(status: string) {
-  if (status === "available") {
-    return { text: "真实端点可用", variant: "success" as const };
-  }
-  if (status === "rate_limited") {
-    return { text: "接口限流中", variant: "warning" as const };
-  }
-  if (status === "unavailable") {
-    return { text: "真实端点不可用", variant: "destructive" as const };
-  }
-  if (status === "not_applicable") {
-    return { text: "不适用", variant: "outline" as const };
-  }
-  return { text: "待确认", variant: "outline" as const };
+function uniqueModels(models: GenericModelRecord[]) {
+  const seen = new Set<string>();
+  return models.filter((model) => {
+    const key = model.modelId ?? model.label;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
-function canUseForRole(model: GenericModelRecord, roleKey: keyof DefaultAssignments) {
-  if (roleKey === "analysisModelId" || roleKey === "planningModelId") {
-    return Boolean(model.capabilities?.text);
+function getModelText(model: GenericModelRecord) {
+  return `${model.modelId ?? ""} ${model.label ?? ""}`.toLowerCase();
+}
+
+function normalizeModelId(modelId: string) {
+  return modelId.toLowerCase().replace(/[^a-z0-9.]+/g, "");
+}
+
+const preferredEconomyTextModelIds = [
+  "gpt-5-mini",
+  "gpt-5-nano",
+  "gpt-4.1-mini",
+  "gpt-4.1-nano",
+  "gpt-4o-mini",
+  "gemini-2.5-flash",
+  "gemini-2.0-flash-001",
+  "gemini-2.0-flash",
+];
+
+function getEconomyTextPreferenceRank(model: GenericModelRecord) {
+  const normalized = normalizeModelId(String(model.modelId ?? model.label ?? ""));
+  const index = preferredEconomyTextModelIds.map(normalizeModelId).indexOf(normalized);
+  return index === -1 ? null : index;
+}
+
+function isPreferredEconomyTextModel(model: GenericModelRecord) {
+  return getEconomyTextPreferenceRank(model) !== null;
+}
+
+function isPreferredGptImage2(model: GenericModelRecord) {
+  const modelId = String(model.modelId ?? model.label ?? "");
+  const normalized = normalizeModelId(modelId);
+  return normalized === "gptimage2" || /^gpt[-_\s]?image[-_\s]?2(?:[-_\s]|$)/i.test(modelId);
+}
+
+function isUtilityModel(model: GenericModelRecord) {
+  return /(embedding|embed|rerank|ranker|moderation|whisper|tts|speech|transcrib|audio|sora|video)/.test(getModelText(model));
+}
+
+function isTextGenerationModel(model: GenericModelRecord) {
+  return (
+    !isUtilityModel(model) &&
+    (Boolean(model.capabilities?.text) ||
+      /(^|[-_])o[134](?:[-_]|$)|gpt|gemini|claude|qwen|qwq|qvq|glm|deepseek|chat|instruct|command|llama|mistral|mixtral|moonshot|kimi|yi-|ernie|hunyuan|spark|doubao|minimax|abab|grok|reka|cohere|sonar/.test(
+        getModelText(model),
+      ))
+  );
+}
+
+function isVisionModel(model: GenericModelRecord) {
+  return (
+    Boolean(model.capabilities?.vision) ||
+    /(vision|vl|4o|omni|gemini|multimodal|qwen-vl|qvq|pixtral|llava|visual|claude-3|claude-sonnet|claude-opus|gpt-4\.1|gpt-5)/.test(
+      getModelText(model),
+    )
+  );
+}
+
+function isImageGenerationModel(model: GenericModelRecord) {
+  return (
+    Boolean(model.capabilities?.image_gen) ||
+    /(image|imagen|flux|sdxl|stable-diffusion|stable.?image|banana|nano-banana|recraft|dall[-_ ]?e|gpt[-_\s]?image|chatgpt-image|seedream|jimeng|midjourney|mj-|ideogram|hidream|kolors|wanx|cogview|playground|leonardo)/.test(
+      getModelText(model),
+    )
+  );
+}
+
+function isImageEditModel(model: GenericModelRecord) {
+  return (
+    Boolean(model.capabilities?.image_edit) ||
+    /(edit|inpaint|mask|kontext|retouch|erase|remove.?background|gpt[-_\s]?image|chatgpt-image)/.test(getModelText(model))
+  );
+}
+
+function isImageProductionModel(model: GenericModelRecord) {
+  return isImageGenerationModel(model) || isImageEditModel(model);
+}
+
+function isStructuredOutputModel(model: GenericModelRecord) {
+  return Boolean(model.capabilities?.structured_output) || isTextGenerationModel(model);
+}
+
+function isEmbeddingOrRerankModel(model: GenericModelRecord) {
+  return /(embedding|embed|rerank|ranker)/.test(getModelText(model));
+}
+
+function isAudioModel(model: GenericModelRecord) {
+  return /(whisper|tts|speech|audio|transcrib)/.test(getModelText(model));
+}
+
+function isVideoModel(model: GenericModelRecord) {
+  return /(sora|video|veo|kling|wan[-_ ]?video)/.test(getModelText(model));
+}
+
+function isModerationModel(model: GenericModelRecord) {
+  return /(moderation|guard|safety|safe)/.test(getModelText(model));
+}
+
+function isFastOrCheapModel(model: GenericModelRecord) {
+  return Boolean(model.capabilities?.fast || model.capabilities?.cheap) || /(flash|mini|nano|lite|turbo|instant)/.test(getModelText(model));
+}
+
+function isHighQualityModel(model: GenericModelRecord) {
+  return Boolean(model.capabilities?.high_quality) || /(pro|ultra|opus|quality|max|sonnet|gpt-5)/.test(getModelText(model));
+}
+
+function isPreviewOrTestModel(model: GenericModelRecord) {
+  return /(^|[-_])(?:preview|experimental|beta|test|deprecated|legacy)(?:[-_]|$)/.test(getModelText(model));
+}
+
+function canUseForModelType(model: GenericModelRecord, typeKey: ModelTypeKey) {
+  if (typeKey === "text") {
+    return isTextGenerationModel(model) && !isImageProductionModel(model);
+  }
+  if (typeKey === "vision") {
+    return isVisionModel(model) && !isImageProductionModel(model);
+  }
+  if (typeKey === "image_gen") {
+    return isImageGenerationModel(model);
+  }
+  return isImageEditModel(model);
+}
+
+function scoreModelForType(model: GenericModelRecord, typeKey: ModelTypeKey) {
+  let score = 0;
+
+  const economyRank = getEconomyTextPreferenceRank(model);
+  if ((typeKey === "text" || typeKey === "vision") && economyRank !== null) {
+    score += 120 - economyRank;
+  }
+  if ((typeKey === "image_gen" || typeKey === "image_edit") && isPreferredGptImage2(model)) {
+    score += normalizeModelId(String(model.modelId ?? model.label ?? "")) === "gptimage2" ? 100 : 90;
   }
 
-  if (roleKey === "heroImageModelId" || roleKey === "detailImageModelId") {
-    return Boolean(model.capabilities?.image_gen) && model.capabilities?.real_image_gen !== false;
+  if (typeKey === "text") {
+    if (isTextGenerationModel(model)) score += 10;
+    if (isStructuredOutputModel(model)) score += 5;
+  } else if (typeKey === "vision") {
+    if (isVisionModel(model)) score += 12;
+    if (isTextGenerationModel(model)) score += 4;
+  } else if (typeKey === "image_edit") {
+    if (isImageEditModel(model)) score += 35;
+  } else {
+    if (isImageGenerationModel(model)) score += 35;
   }
 
-  if (roleKey === "imageEditModelId") {
-    return (
-      (Boolean(model.capabilities?.image_edit) && model.capabilities?.real_image_edit !== false) ||
-      (Boolean(model.capabilities?.image_gen) && model.capabilities?.real_image_gen !== false)
-    );
+  if (isHighQualityModel(model)) score += 4;
+  if (isFastOrCheapModel(model)) score += 6;
+  if ((typeKey === "text" || typeKey === "vision") && /gpt[-_\s]?5\.5|gpt[-_\s]?5\.4[-_\s]?pro|pro|max/i.test(getModelText(model))) {
+    score -= 25;
+  }
+  if (isPreviewOrTestModel(model)) score -= 8;
+
+  return score;
+}
+
+function getModelsForType(models: GenericModelRecord[], typeKey: ModelTypeKey) {
+  return uniqueModels(models.filter((model) => canUseForModelType(model, typeKey))).sort((left, right) => {
+    const diff = scoreModelForType(right, typeKey) - scoreModelForType(left, typeKey);
+    if (diff !== 0) return diff;
+    return String(left.modelId ?? left.label).localeCompare(String(right.modelId ?? right.label));
+  });
+}
+
+function getTypeDefaultValue(defaults: DefaultAssignments, typeKey: ModelTypeKey) {
+  if (typeKey === "text") {
+    return defaults.planningModelId ?? "";
+  }
+  if (typeKey === "vision") {
+    return defaults.analysisModelId ?? "";
+  }
+  if (typeKey === "image_gen") {
+    return defaults.heroImageModelId || defaults.detailImageModelId || "";
+  }
+  return defaults.imageEditModelId ?? "";
+}
+
+function setTypeDefaultValue(defaults: DefaultAssignments, typeKey: ModelTypeKey, modelId: string): DefaultAssignments {
+  if (typeKey === "text") {
+    return { ...defaults, planningModelId: modelId };
+  }
+  if (typeKey === "vision") {
+    return { ...defaults, analysisModelId: modelId };
+  }
+  if (typeKey === "image_gen") {
+    return { ...defaults, heroImageModelId: modelId, detailImageModelId: modelId };
+  }
+  return { ...defaults, imageEditModelId: modelId };
+}
+
+function buildCapabilityGroups(models: GenericModelRecord[]): ModelOptionGroup[] {
+  return [
+    {
+      key: "text",
+      label: "文本生成模型",
+      description: "用于商品分析、页面规划、文案生成和结构化输出",
+      models: models.filter(isTextGenerationModel),
+    },
+    {
+      key: "vision",
+      label: "图像识别模型",
+      description: "用于理解上传商品图、参考图和多模态分析",
+      models: models.filter(isVisionModel),
+    },
+    {
+      key: "image_gen",
+      label: "图像生成模型",
+      description: "用于生成头图、详情图和电商视觉素材",
+      models: models.filter(isImageGenerationModel),
+    },
+    {
+      key: "image_edit",
+      label: "图像编辑模型",
+      description: "用于重绘、增强、局部修改和基于参考图编辑",
+      models: models.filter(isImageEditModel),
+    },
+    {
+      key: "structured",
+      label: "结构化输出模型",
+      description: "用于稳定返回 JSON、规划模块和可解析结果",
+      models: models.filter(isStructuredOutputModel),
+    },
+    {
+      key: "embedding",
+      label: "Embedding / Rerank 模型",
+      description: "用于向量检索、排序和相似度任务",
+      models: models.filter(isEmbeddingOrRerankModel),
+    },
+    {
+      key: "audio",
+      label: "音频模型",
+      description: "用于语音识别、转写或语音合成",
+      models: models.filter(isAudioModel),
+    },
+    {
+      key: "video",
+      label: "视频模型",
+      description: "用于视频生成或视频理解",
+      models: models.filter(isVideoModel),
+    },
+    {
+      key: "moderation",
+      label: "安全审核模型",
+      description: "用于内容审核、安全分类和风控",
+      models: models.filter(isModerationModel),
+    },
+    {
+      key: "fast",
+      label: "高速/低成本模型",
+      description: "适合草稿、批量预览和低成本任务",
+      models: models.filter(isFastOrCheapModel),
+    },
+    {
+      key: "high_quality",
+      label: "高质量模型",
+      description: "适合最终生成、复杂推理和高品质视觉任务",
+      models: models.filter(isHighQualityModel),
+    },
+    {
+      key: "other",
+      label: "其他模型",
+      description: "当前规则未明确归类的模型，仍可在默认角色中手动选择",
+      models: models.filter(
+        (model) =>
+          !isTextGenerationModel(model) &&
+          !isVisionModel(model) &&
+          !isImageGenerationModel(model) &&
+          !isImageEditModel(model) &&
+          !isEmbeddingOrRerankModel(model) &&
+          !isAudioModel(model) &&
+          !isVideoModel(model) &&
+          !isModerationModel(model),
+      ),
+    },
+  ]
+    .map((group) => ({ ...group, models: uniqueModels(group.models) }))
+    .filter((group) => group.models.length > 0);
+}
+
+function pickModel(models: GenericModelRecord[], predicates: Array<(model: GenericModelRecord) => boolean>) {
+  for (const predicate of predicates) {
+    const matched = models.find(predicate);
+    if (matched?.modelId) {
+      return matched.modelId;
+    }
   }
 
-  return true;
+  return "";
+}
+
+function buildRecommendedDefaults(models: GenericModelRecord[]): DefaultAssignments {
+  const visionModels = getModelsForType(models, "vision");
+  const textModels = getModelsForType(models, "text");
+  const imageGenerationModels = getModelsForType(models, "image_gen");
+  const imageEditModels = getModelsForType(models, "image_edit");
+  const economyVision = pickModel(visionModels, [isPreferredEconomyTextModel]);
+  const economyText = pickModel(textModels, [isPreferredEconomyTextModel]);
+  const gptImage2Generation = pickModel(imageGenerationModels, [isPreferredGptImage2]);
+  const gptImage2Edit = pickModel(imageEditModels, [isPreferredGptImage2]);
+
+  return {
+    analysisModelId: economyVision || pickModel(visionModels, [() => true]),
+    planningModelId: economyText || pickModel(textModels, [() => true]),
+    heroImageModelId: gptImage2Generation || pickModel(imageGenerationModels, [() => true]),
+    detailImageModelId: gptImage2Generation || pickModel(imageGenerationModels, [() => true]),
+    imageEditModelId: gptImage2Edit || pickModel(imageEditModels, [() => true]),
+  };
 }
 
 function formatTimeLabel(value: string | Date) {
@@ -167,12 +446,13 @@ export function ProviderSettings({ initialProviders }: ProviderSettingsProps) {
       defaultAssignments: undefined,
     },
   });
+  const { reset } = form;
 
   useEffect(() => {
     const nextProvider = selectedProvider ?? null;
     setModels(nextProvider?.models ?? []);
     setDefaults(buildDefaults(nextProvider));
-    form.reset({
+    reset({
       id: nextProvider?.id ?? undefined,
       name: nextProvider?.name ?? "默认模型服务",
       baseUrl: nextProvider?.baseUrl ?? "",
@@ -180,12 +460,18 @@ export function ProviderSettings({ initialProviders }: ProviderSettingsProps) {
       isActive: true,
       defaultAssignments: undefined,
     });
-  }, [selectedProvider, form]);
+  }, [selectedProvider, reset]);
 
   const availableImageModels = useMemo(
-    () => models.filter((model) => model.capabilities?.image_gen && model.capabilities?.real_image_gen !== false),
+    () => models.filter(isImageGenerationModel),
     [models],
   );
+  const capabilityGroups = useMemo(() => buildCapabilityGroups(models), [models]);
+
+  function handleAutoFillDefaults() {
+    setDefaults(buildRecommendedDefaults(models));
+    toast.success("已按模型能力类型自动填充默认角色");
+  }
 
   function hydrateFromSavedProviders(nextProviders: ProviderRecord[], nextSelectedId?: string | null) {
     setProviders(nextProviders);
@@ -249,7 +535,7 @@ export function ProviderSettings({ initialProviders }: ProviderSettingsProps) {
       }
       setModels(payload.data.models);
       setDefaults(payload.data.recommendations);
-      toast.success(`已发现 ${payload.data.models.length} 个模型，并完成能力探测`);
+      toast.success(`已发现 ${payload.data.models.length} 个模型，并完成能力识别`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "模型发现失败");
     } finally {
@@ -268,6 +554,7 @@ export function ProviderSettings({ initialProviders }: ProviderSettingsProps) {
             ...values,
             id: overwriteExisting ? values.id : undefined,
             defaultAssignments: defaults,
+            discoveredModels: models,
           }),
         });
         const payload = await response.json();
@@ -292,9 +579,7 @@ export function ProviderSettings({ initialProviders }: ProviderSettingsProps) {
       <Card>
         <CardHeader>
           <CardTitle>模型服务连接</CardTitle>
-          <CardDescription>
-            在这里可以直接读取已保存服务、测试连接、重新发现模型，并把当前配置覆盖保存或另存为新服务。
-          </CardDescription>
+          <CardDescription>读取已保存服务、测试连接、重新发现模型，并保存当前配置。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">
           <div className="space-y-3 rounded-3xl border border-border bg-muted/40 p-4">
@@ -315,7 +600,7 @@ export function ProviderSettings({ initialProviders }: ProviderSettingsProps) {
                     {providers.length === 0 ? <option value="">暂无已保存服务</option> : null}
                     {providers.map((provider) => (
                       <option key={provider.id} value={provider.id}>
-                        {provider.name} · {provider.baseUrl}
+                        {provider.name} / {provider.baseUrl}
                       </option>
                     ))}
                   </select>
@@ -337,9 +622,7 @@ export function ProviderSettings({ initialProviders }: ProviderSettingsProps) {
                   onClick={() => selectedProviderId && handleActivateProvider(selectedProviderId)}
                   disabled={!selectedProviderId || selectedProvider?.isActive || switchingProviderId !== null}
                 >
-                  {switchingProviderId === selectedProviderId ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : null}
+                  {switchingProviderId === selectedProviderId ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                   {selectedProvider?.isActive ? "当前使用中" : "切换为当前服务"}
                 </Button>
               </div>
@@ -352,13 +635,11 @@ export function ProviderSettings({ initialProviders }: ProviderSettingsProps) {
                 </div>
                 <p className="mt-2 text-sm text-muted-foreground">{selectedProvider.baseUrl}</p>
                 <p className="mt-1 text-xs text-muted-foreground">Key：{selectedProvider.maskedApiKey || "未显示"}</p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  最近更新：{formatTimeLabel(selectedProvider.updatedAt)}
-                </p>
+                <p className="mt-1 text-xs text-muted-foreground">最近更新：{formatTimeLabel(selectedProvider.updatedAt)}</p>
               </div>
             ) : (
               <div className="rounded-2xl border border-dashed border-border p-4 text-sm text-muted-foreground">
-                还没有保存过服务配置。首次保存后，这里就可以直接读取并快捷切换。
+                还没有保存过服务配置。首次保存后，这里可以直接读取并快速切换。
               </div>
             )}
           </div>
@@ -410,7 +691,7 @@ export function ProviderSettings({ initialProviders }: ProviderSettingsProps) {
                 {...form.register("apiKey")}
               />
               <p className="text-xs text-muted-foreground">
-                选择历史服务后，名字、URL 和 Key 会直接回填到表单；修改后可以覆盖保存，也可以另存为新的服务配置。
+                选择历史服务后，名称、URL 和 Key 会回填到表单；修改后可以覆盖保存，也可以另存为新的服务配置。
               </p>
             </div>
           </form>
@@ -421,12 +702,8 @@ export function ProviderSettings({ initialProviders }: ProviderSettingsProps) {
               测试连接
             </Button>
             <Button type="button" variant="secondary" onClick={handleDiscover} disabled={loading !== null}>
-              {loading === "discover" ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Search className="mr-2 h-4 w-4" />
-              )}
-              发现模型并探测
+              {loading === "discover" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Search className="mr-2 h-4 w-4" />}
+              发现模型并识别能力
             </Button>
             <Button type="button" onClick={() => saveProvider(true)} disabled={loading !== null || models.length === 0}>
               {loading === "save" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
@@ -438,57 +715,55 @@ export function ProviderSettings({ initialProviders }: ProviderSettingsProps) {
               onClick={() => saveProvider(false)}
               disabled={loading !== null || models.length === 0}
             >
-              {loading === "saveAsNew" ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <CopyPlus className="mr-2 h-4 w-4" />
-              )}
+              {loading === "saveAsNew" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CopyPlus className="mr-2 h-4 w-4" />}
               另存为新服务
             </Button>
           </div>
 
           {models.length > 0 ? (
             <div className="space-y-4 rounded-3xl bg-muted/60 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <h3 className="font-medium">默认模型角色分配</h3>
-                <Badge>{models.length} 个模型</Badge>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="font-medium">默认模型类型分配</h3>
+                  <Badge>{models.length} 个模型</Badge>
+                </div>
+                <Button type="button" variant="outline" size="sm" onClick={handleAutoFillDefaults}>
+                  按能力自动填充
+                </Button>
               </div>
 
               {availableImageModels.length === 0 ? (
                 <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300">
-                  当前 Provider 尚未探测到可用于真实出图的模型，头图和详情图角色会被禁用。
+                  当前 Provider 尚未识别到图像生成模型，头图和详情图角色会被禁用。
                 </div>
               ) : null}
 
               <div className="grid gap-4 md:grid-cols-2">
-                {roleFieldLabels.map(([key, label]) => (
-                  <div key={key} className="space-y-2">
-                    <Label>{label}</Label>
-                    <select
-                      className="flex h-10 w-full rounded-xl border border-input bg-background px-3 text-sm text-foreground dark:bg-black/30"
-                      value={defaults[key] ?? ""}
-                      onChange={(event) => setDefaults((current) => ({ ...current, [key]: event.target.value }))}
-                    >
-                      <option value="">未选择</option>
-                      {models.map((model) => {
-                        const disabled = !canUseForRole(model, key);
-                        const unavailableSuffix =
-                          key === "heroImageModelId" || key === "detailImageModelId" || key === "imageEditModelId"
-                            ? disabled
-                              ? "（不适合作为真实图片默认模型）"
-                              : ""
-                            : "";
+                {modelTypeFields.map((field) => {
+                  const options = getModelsForType(models, field.key);
+                  const selectedValue = getTypeDefaultValue(defaults, field.key);
 
-                        return (
-                          <option key={model.modelId} value={model.modelId} disabled={disabled}>
+                  return (
+                    <div key={field.key} className="space-y-2">
+                      <Label>{field.label}</Label>
+                      <select
+                        className="flex h-10 w-full rounded-xl border border-input bg-background px-3 text-sm text-foreground dark:bg-black/30"
+                        value={selectedValue}
+                        disabled={options.length === 0}
+                        onChange={(event) =>
+                          setDefaults((current) => setTypeDefaultValue(current, field.key, event.target.value))
+                        }
+                      >
+                        <option value="">{options.length === 0 ? "暂无此类型模型" : "未选择"}</option>
+                        {options.map((model) => (
+                          <option key={field.key + "-" + model.modelId} value={model.modelId}>
                             {model.label}
-                            {unavailableSuffix}
                           </option>
-                        );
-                      })}
-                    </select>
-                  </div>
-                ))}
+                        ))}
+                      </select>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           ) : null}
@@ -497,66 +772,44 @@ export function ProviderSettings({ initialProviders }: ProviderSettingsProps) {
 
       <Card>
         <CardHeader>
-          <CardTitle>模型能力归一化结果</CardTitle>
-          <CardDescription>能力标签来自模型列表、命名启发式，以及真实图片端点探测结果。</CardDescription>
+          <CardTitle>模型能力分组</CardTitle>
+          <CardDescription>按功能类型聚合模型，避免大量模型逐条铺开。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {models.length === 0 ? (
             <div className="rounded-3xl border border-dashed border-border p-6 text-sm text-muted-foreground">
-              先测试并发现模型，系统会在这里展示能力标签、真实图片端点可用性和默认推荐结果。
+              先测试并发现模型，系统会在这里按能力类型展示可用模型。
             </div>
           ) : (
-            models.map((model) => {
-              const imageGenBadge = getEndpointBadge(model.endpointSupport?.imageGeneration ?? "unknown");
-              const imageEditBadge = getEndpointBadge(model.endpointSupport?.imageEdit ?? "unknown");
+            <div className="grid gap-4">
+              {capabilityGroups.map((group) => {
+                const visibleModels = group.models.slice(0, 18);
+                const hiddenCount = Math.max(0, group.models.length - visibleModels.length);
+                const isPassiveImageGroup = group.key === "image_gen" || group.key === "image_edit";
 
-              return (
-                <div key={model.modelId} className="rounded-3xl border border-border p-4">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="space-y-1">
-                      <p className="font-medium">{model.label}</p>
-                      <p className="text-xs text-muted-foreground">{model.modelId}</p>
+                return (
+                  <div key={group.key} className="rounded-3xl border border-border p-4">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="font-medium">{group.label}</h3>
+                        <Badge variant="outline">{group.models.length} 个模型</Badge>
+                        {isPassiveImageGroup ? <Badge variant="outline">未实测端点</Badge> : null}
+                      </div>
+                      <p className="mt-1 text-sm text-muted-foreground">{group.description}</p>
                     </div>
-                    <div className="flex flex-wrap gap-2">
-                      {Object.entries(model.capabilities ?? {})
-                        .filter(([capability, enabled]) => Boolean(enabled) && capabilityLabels[capability as keyof typeof capabilityLabels])
-                        .map(([capability]) => (
-                          <Badge key={capability} variant="outline">
-                            {capabilityLabels[capability as keyof typeof capabilityLabels] ?? capability}
-                          </Badge>
-                        ))}
+
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {visibleModels.map((model) => (
+                        <Badge key={group.key + "-" + model.modelId} variant="outline" className="max-w-full truncate">
+                          {model.label}
+                        </Badge>
+                      ))}
+                      {hiddenCount > 0 ? <Badge>+ {hiddenCount} 个</Badge> : null}
                     </div>
                   </div>
-
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {model.capabilities?.image_gen ? (
-                      <Badge variant={imageGenBadge.variant}>{`出图端点：${imageGenBadge.text}`}</Badge>
-                    ) : null}
-                    {model.capabilities?.image_edit ? (
-                      <Badge variant={imageEditBadge.variant}>{`编辑端点：${imageEditBadge.text}`}</Badge>
-                    ) : null}
-                    {model.capabilities?.image_gen && model.capabilities?.real_image_gen === false ? (
-                      <Badge variant="destructive">
-                        <AlertTriangle className="mr-1 h-3.5 w-3.5" />
-                        不建议设为头图 / 详情图默认模型
-                      </Badge>
-                    ) : null}
-                    {model.capabilities?.image_gen && model.capabilities?.real_image_gen !== false ? (
-                      <Badge variant="success">
-                        <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
-                        可用于真实图片生成
-                      </Badge>
-                    ) : null}
-                  </div>
-
-                  {model.endpointSupport?.note ? (
-                    <p className="mt-3 line-clamp-3 text-xs leading-5 text-muted-foreground">
-                      {model.endpointSupport.note}
-                    </p>
-                  ) : null}
-                </div>
-              );
-            })
+                );
+              })}
+            </div>
           )}
         </CardContent>
       </Card>

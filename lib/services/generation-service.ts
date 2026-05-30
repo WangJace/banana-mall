@@ -95,11 +95,15 @@ function isStableImageModel(modelId: string) {
 }
 
 function isPreferredImageModel(modelId: string) {
-  return /(banana|nano-banana|nano banana|imagen|recraft|flux|gemini|gpt-image|gpt-image-1)/i.test(modelId);
+  return /(banana|nano-banana|nano banana|imagen|recraft|flux|gemini|gpt[-_\s]?image|chatgpt-image|dall[-_\s]?e|seedream|jimeng|midjourney|ideogram|hidream|kolors|wanx|cogview)/i.test(modelId);
 }
 
 function isGeminiImageModel(modelId: string) {
   return /gemini.*image|nano-banana|banana/i.test(modelId);
+}
+
+function isOpenAiGptImageModel(modelId: string) {
+  return /(?:^|[-_\s])gpt[-_\s]?image(?:[-_\s]?(?:\d+(?:\.\d+)?|mini))?|chatgpt-image/i.test(modelId);
 }
 
 function readCapabilities(model: { capabilities: unknown }) {
@@ -127,15 +131,17 @@ function hasRealImageEdit(model: { capabilities: unknown }) {
 }
 
 function canGenerateRealImage(model: { capabilities: unknown }) {
-  return hasImageCapability(model) && (hasRealImageGeneration(model) || isGeminiImageModel((model as { modelId?: string }).modelId ?? ""));
+  const modelId = (model as { modelId?: string }).modelId ?? "";
+  return hasImageCapability(model) && (hasRealImageGeneration(model) || isGeminiImageModel(modelId) || isOpenAiGptImageModel(modelId));
 }
 
 function canEditRealImage(model: { capabilities: unknown }) {
   const capabilities = readCapabilities(model);
+  const modelId = (model as { modelId?: string }).modelId ?? "";
   return (
     (Boolean(capabilities.image_edit) && capabilities.real_image_edit !== false) ||
     (Boolean(capabilities.image_gen) &&
-      (capabilities.real_image_gen !== false || isGeminiImageModel((model as { modelId?: string }).modelId ?? "")))
+      (capabilities.real_image_gen !== false || isGeminiImageModel(modelId) || isOpenAiGptImageModel(modelId)))
   );
 }
 
@@ -157,10 +163,19 @@ function buildImageModelCandidates(
       ? "isDefaultDetailImage"
       : "isDefaultHeroImage";
 
+  if (options?.preferredModelId) {
+    return [options.preferredModelId];
+  }
+
+  const configuredDefault =
+    candidatePool.find((item) => Boolean(item[defaultKey]))?.modelId ??
+    (!options?.edit ? candidatePool.find((item) => item.isDefaultDetailImage)?.modelId : null);
+
+  if (configuredDefault) {
+    return [configuredDefault];
+  }
+
   const candidates = [
-    options?.preferredModelId ?? null,
-    candidatePool.find((item) => Boolean(item[defaultKey]))?.modelId ?? null,
-    candidatePool.find((item) => item.isDefaultDetailImage)?.modelId ?? null,
     ...candidatePool
       .filter((item) => isStableImageModel(item.modelId) && isPreferredImageModel(item.modelId))
       .map((item) => item.modelId),
@@ -198,7 +213,15 @@ function shouldFallbackToNextImageModel(error: unknown) {
     return false;
   }
 
-  return /404|405|429|no available endpoint|unsupported|not implemented|provider request failed|does not exist|invalid_value/i.test(
+  if (
+    /monthly spending limit|spending limit|billing|quota|insufficient_quota|403|forbidden|unauthorized|invalid token|api key|429|rate limit|限流/i.test(
+      error.message,
+    )
+  ) {
+    return false;
+  }
+
+  return /404|405|no available endpoint|unsupported|not implemented|does not exist|invalid_value|unknown parameter|invalid type|supported values|invalid value.+size/i.test(
     error.message,
   );
 }
@@ -653,7 +676,7 @@ async function generateSectionImageInternal(
 
     try {
       if (!selectedModel) {
-        throw new Error("当前 Provider 没有探测到可用于真实图片生成的模型。");
+        throw new Error("当前 Provider 没有识别到可用于真实图片生成的模型。");
       }
 
       const generation = await generateWithFallback({
@@ -898,7 +921,7 @@ export async function editSectionImage(
 
     try {
       if (!selectedModel) {
-        throw new Error("当前 Provider 没有探测到可用于真实图片编辑的模型。");
+        throw new Error("当前 Provider 没有识别到可用于真实图片编辑的模型。");
       }
 
       const generation = await editWithFallback({

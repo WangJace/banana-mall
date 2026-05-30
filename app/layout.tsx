@@ -10,6 +10,11 @@ import { ChunkReloadGuard } from "@/components/shared/chunk-reload-guard";
 
 export const metadata: Metadata = {
   title: "banana-mall",
+  icons: {
+    icon: "/favicon.ico",
+    shortcut: "/favicon.ico",
+    apple: "/brand-icon.ico",
+  },
   description: "AI 电商详情页生成与编辑工作台",
 };
 

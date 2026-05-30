@@ -67,7 +67,7 @@ const heroFallbackSections: Array<{
     goal: "快速建立商品记忆点，突出第一眼吸引力。",
     copy: "用一张完成度很高的主视觉图，把商品核心价值和气质一次讲清楚。",
     visualPrompt:
-      "中文提示：电商头图主视觉，商品主体居中，画面高级干净，加入精炼中文标题与品牌感文案，适合 1:1 头图轮播。\nEnglish Prompt: Premium e-commerce hero visual with centered product, clean lighting, strong branding copy built into the image, ideal for a square gallery cover.",
+      "中文提示：1:1 电商首张主视觉，商品以 3/4 角度居中偏下，占画面 55%-65%，浅色高级背景，左上保留大标题区，右侧用 2-3 个短卖点标签围绕真实结构标注。必须保持商品真实几何、开口/线缆/风口/按钮方向正确，不出现悬浮、反向风、线缆插入桌面等不合理物理现象。\nEnglish Prompt: Square e-commerce primary hero image, product in a three-quarter view centered slightly lower, occupying 55-65% of the canvas, premium light background, large headline area at top-left, 2-3 selling point tags around real product structures. Preserve real product geometry and avoid impossible physics such as floating, reversed airflow, or cables merging into surfaces.",
     editableFields: {
       tone: "高级质感",
       compositionHint: "居中构图",
@@ -80,7 +80,7 @@ const heroFallbackSections: Array<{
     goal: "用一张强转化头图把最值得买的理由直接讲透。",
     copy: "把商品最强卖点直接做进画面标题和图内短句里，让用户第一时间知道为什么值得买。",
     visualPrompt:
-      "中文提示：电商头图，突出核心卖点信息，商品主体清晰，图内直接排版中文标题、短卖点和轻行动号召，适合 1:1 头图轮播。\nEnglish Prompt: Square e-commerce hero image focused on the strongest selling point, with Chinese headline, short selling copy, and a subtle CTA integrated directly inside the image.",
+      "中文提示：1:1 核心卖点头图，画面采用近景产品 + 功能分解标注，商品主体放在右侧或中间，左侧放强转化标题、3 个短卖点和 CTA。镜头要明确展示最关键功能部位，例如喷口/开口/抽屉/按键/材质接缝；所有标注线必须指向真实部件。禁止出现结构错位、功能方向反转、线缆断裂或穿进桌面。\nEnglish Prompt: Square selling-point hero image with close product view and functional annotations. Place product at center or right, strong conversion headline, three short selling points, and CTA on the left. Clearly show the key functional part such as nozzle, opening, drawer, button, or material seam. Annotation lines must point to real parts; avoid misaligned structure, reversed function direction, broken cables, or cables entering furniture.",
     editableFields: {
       tone: "转化导向",
       compositionHint: "主体 + 卖点文案同屏",
@@ -93,7 +93,7 @@ const heroFallbackSections: Array<{
     goal: "让用户快速代入使用场景和生活方式气质。",
     copy: "通过场景化构图和图内标题文案，让商品与生活方式、使用时刻建立直接关联。",
     visualPrompt:
-      "中文提示：电商头图，场景化生活方式氛围，商品依然是主角，图内直接排版中文场景标题与情绪化价值文案，适合 1:1 头图轮播。\nEnglish Prompt: Square e-commerce hero image with a strong lifestyle scene, keeping the product as the focal point and integrating Chinese scene-driven headline and emotional value copy into the image.",
+      "中文提示：1:1 场景氛围头图，把商品放入真实使用场景，采用中景构图，周围只放 2-4 个相关道具来说明使用时刻，背景有生活方式氛围但不能抢主体。图内标题放在上方留白，场景价值短句放在底部半透明信息条。商品必须有合理支撑、阴影和使用方向；如果是电器，线缆和风/光/热方向必须符合真实工作逻辑。\nEnglish Prompt: Square lifestyle hero image showing the product in a real usage scene with medium shot composition and 2-4 relevant props. Background should add lifestyle mood without stealing focus. Place headline in upper whitespace and scene-value copy in a subtle bottom information bar. Product must have realistic support, shadows, and use direction; for appliances, cable and airflow/light/heat direction must follow real mechanics.",
     editableFields: {
       tone: "氛围感",
       compositionHint: "场景化构图",

@@ -63,7 +63,7 @@ export interface ImageGenerationResult {
 
 export interface ProviderAdapter {
   testConnection(): Promise<{ ok: boolean; providerLabel: string }>;
-  listModels(): Promise<Array<{ id: string; label: string }>>;
+  listModels(): Promise<Array<{ id: string; label: string; type?: string | null; category?: string | null; modalities?: string[] }>>;
   generateText(input: TextRequest): Promise<{ text: string }>;
   generateStructured<T>(input: StructuredRequest<T>): Promise<{ parsed: T; raw: string }>;
   generateImage(input: ImageGenerationRequest): Promise<ImageGenerationResult>;

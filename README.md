@@ -1,4 +1,4 @@
-# Banana Mall 🍌
+# AI Product Page Generator
 
 > AI-powered e-commerce detail page generation & editing workspace  
 > AI 电商详情页生成与编辑工作台
@@ -12,15 +12,15 @@
   <img src="https://img.shields.io/badge/Electron-Desktop-47848F?logo=electron" />
   <img src="https://img.shields.io/badge/AI-OpenAI%20Compatible-green" />
   <img src="https://img.shields.io/badge/License-MIT-yellow" />
-  <img src="https://img.shields.io/github/stars/ziguishian/banana-mall?style=social" />
+  <img src="https://img.shields.io/github/stars/ziguishian/ai-product-page-generator?style=social" />
 </p>
 
 ## ✨ Overview / 项目简介
 
-**BananaMall** 是一个 AI 驱动的电商详情页生成工具，由 [MatrixInspire（灵矩绘境）](https://mxinspire.com) 开发。
+**AI Product Page Generator** 是一个 AI 驱动的电商详情页生成工具，由 [MatrixInspire（灵矩绘境）](https://mxinspire.com) 开发。
 
-Banana Mall is an AI-native workspace designed to turn product images into fully structured, high-conversion e-commerce detail pages.
-Banana Mall 是一个 AI 原生的电商内容工作台，可以将商品图片转化为完整的高转化详情页。由 MatrixInspire（灵矩绘境） 开发。
+AI Product Page Generator is an AI-native workspace designed to turn product images into fully structured, high-conversion e-commerce detail pages.
+AI Product Page Generator 是一个 AI 原生的电商内容工作台，可以将商品图片转化为完整的高转化详情页。由 MatrixInspire（灵矩绘境） 开发。
 
 ---
 
@@ -278,15 +278,15 @@ If you like this project, give it a star ⭐
 <picture>
   <source
     media="(prefers-color-scheme: dark)"
-    srcset="https://api.star-history.com/svg?repos=ziguishian/banana-mall&type=Date&theme=dark"
+    srcset="https://api.star-history.com/svg?repos=ziguishian/ai-product-page-generator&type=Date&theme=dark"
   />
   <source
     media="(prefers-color-scheme: light)"
-    srcset="https://api.star-history.com/svg?repos=ziguishian/banana-mall&type=Date"
+    srcset="https://api.star-history.com/svg?repos=ziguishian/ai-product-page-generator&type=Date"
   />
   <img
     alt="Star History Chart"
-    src="https://api.star-history.com/svg?repos=ziguishian/banana-mall&type=Date"
+    src="https://api.star-history.com/svg?repos=ziguishian/ai-product-page-generator&type=Date"
   />
 </picture>
 

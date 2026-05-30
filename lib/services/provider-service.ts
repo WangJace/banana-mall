@@ -3,7 +3,12 @@ import { OpenAICompatibleAdapter } from "@/lib/ai/adapters/openai-compatible";
 import { normalizeDetectedModels } from "@/lib/ai/capability-detector";
 import { recommendDefaultModels } from "@/lib/ai/model-matcher";
 import { decryptSecret, encryptSecret } from "@/lib/utils/crypto";
-import type { ProviderConnectionInput } from "@/types/domain";
+import type {
+  CapabilityMap,
+  ModelDetectionResult,
+  ModelRoleMap,
+  ProviderConnectionInput,
+} from "@/types/domain";
 
 type RuntimeProviderModel = {
   id: string;
@@ -45,6 +50,41 @@ type ProviderAdapterContext = {
   adapter: OpenAICompatibleAdapter;
 };
 
+type ProviderModelSnapshot = {
+  modelId: string;
+  label: string;
+  capabilities: Record<string, unknown>;
+  roles: Record<string, unknown>;
+  quality?: string | null;
+  latency?: string | null;
+  cost?: string | null;
+  isAvailable: boolean;
+  endpointSupport?: {
+    imageGeneration: string;
+    imageEdit: string;
+    note?: string | null;
+  };
+};
+
+type DiscoveredProviderModel = {
+  id: string;
+  label?: string;
+  type?: string | null;
+  category?: string | null;
+  modalities?: string[];
+};
+
+const OPENAI_IMAGE_MODEL_PRESETS: DiscoveredProviderModel[] = [
+  { id: "gpt-image-2-2026-04-21", label: "gpt-image-2-2026-04-21", type: "image", category: "image" },
+  { id: "gpt-image-2", label: "gpt-image-2", type: "image", category: "image" },
+  { id: "gpt-image-1.5", label: "gpt-image-1.5", type: "image", category: "image" },
+  { id: "gpt-image-1.5-2025-12-16", label: "gpt-image-1.5-2025-12-16", type: "image", category: "image" },
+  { id: "gpt-image-1-mini", label: "gpt-image-1-mini", type: "image", category: "image" },
+  { id: "gpt-image-1", label: "gpt-image-1", type: "image", category: "image" },
+  { id: "dall-e-3", label: "dall-e-3", type: "image", category: "image" },
+  { id: "dall-e-2", label: "dall-e-2", type: "image", category: "image" },
+];
+
 function maskApiKey(apiKey: string) {
   const trimmed = apiKey.trim();
   if (!trimmed) return "";
@@ -69,109 +109,93 @@ function hydrateProviderModels<T extends { capabilities: any }>(models: T[]) {
   }));
 }
 
-function scoreImageProbePriority(modelId: string) {
-  let score = 0;
-  const id = modelId.toLowerCase();
-
-  if (/gemini|imagen|banana|nano-banana|flux|recraft/.test(id)) score += 8;
-  if (/image|imagen|edit|inpaint/.test(id)) score += 6;
-  if (/pro|ultra|max/.test(id)) score += 2;
-  if (/preview|experimental|beta|test/.test(id)) score -= 2;
-  if (/deprecated|old|legacy/.test(id)) score -= 4;
-
-  return score;
+function shouldIncludeOpenAiImagePresets(baseUrl: string, models: Array<{ modelId?: string; id?: string }>) {
+  const text = `${baseUrl} ${models.map((model) => model.modelId ?? model.id ?? "").join(" ")}`.toLowerCase();
+  return /openai|chatgpt|gpt-|(^|[^a-z])o[1345](?:[^a-z]|$)|dall[-_\s]?e/.test(text);
 }
 
-async function runWithConcurrency<T, R>(
-  items: T[],
-  concurrency: number,
-  worker: (item: T) => Promise<R>,
-) {
-  const results: R[] = new Array(items.length);
-  let cursor = 0;
-
-  async function consume() {
-    while (true) {
-      const index = cursor;
-      cursor += 1;
-      if (index >= items.length) return;
-      results[index] = await worker(items[index]);
-    }
+function mergeDiscoveredModels(baseUrl: string, models: DiscoveredProviderModel[]) {
+  if (!shouldIncludeOpenAiImagePresets(baseUrl, models)) {
+    return models;
   }
 
-  const workers = Array.from({ length: Math.max(1, Math.min(concurrency, items.length)) }, () => consume());
-  await Promise.all(workers);
-  return results;
+  const seen = new Set(models.map((model) => model.id.toLowerCase()));
+  const missingPresets = OPENAI_IMAGE_MODEL_PRESETS.filter((model) => !seen.has(model.id.toLowerCase()));
+  return [...models, ...missingPresets];
 }
 
-async function enrichModelEndpointSupport(
-  adapter: OpenAICompatibleAdapter,
-  models: ReturnType<typeof normalizeDetectedModels>,
+function mergeHydratedProviderModels<T extends RuntimeProviderModel>(
+  providerId: string,
+  baseUrl: string,
+  models: T[],
 ) {
-  const enriched = models.map((model) => ({ ...model }));
-  const imageCandidates = enriched
-    .filter((model) => model.capabilities.image_gen || model.capabilities.image_edit)
-    .sort((left, right) => scoreImageProbePriority(right.modelId) - scoreImageProbePriority(left.modelId));
-
-  const maxProbeCount = Math.min(12, imageCandidates.length);
-  const toProbe = imageCandidates.slice(0, maxProbeCount);
-  const skipped = imageCandidates.slice(maxProbeCount);
-
-  for (const model of enriched) {
-    if (!model.capabilities.image_gen && !model.capabilities.image_edit) {
-      model.endpointSupport = {
-        imageGeneration: "not_applicable",
-        imageEdit: "not_applicable",
-        note: null,
-      };
-      continue;
-    }
-
-    model.endpointSupport = {
-      imageGeneration: "unknown",
-      imageEdit: "unknown",
-      note: "等待探测",
-    };
-    (model.capabilities as Record<string, unknown>).__imageGenerationStatus = "unknown";
-    (model.capabilities as Record<string, unknown>).__imageEditStatus = "unknown";
-    (model.capabilities as Record<string, unknown>).__probeNote = "等待探测";
+  if (!shouldIncludeOpenAiImagePresets(baseUrl, models)) {
+    return models;
   }
 
-  await runWithConcurrency(toProbe, 4, async (model) => {
-    try {
-      const support = await adapter.probeImageEndpointSupport(model.modelId);
-      model.endpointSupport = support;
-      model.capabilities.real_image_gen = support.imageGeneration !== "unavailable";
-      model.capabilities.real_image_edit = support.imageEdit !== "unavailable";
-      (model.capabilities as Record<string, unknown>).__imageGenerationStatus = support.imageGeneration;
-      (model.capabilities as Record<string, unknown>).__imageEditStatus = support.imageEdit;
-      (model.capabilities as Record<string, unknown>).__probeNote = support.note ?? null;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown probe error";
-      model.endpointSupport = {
-        imageGeneration: "unknown",
-        imageEdit: "unknown",
-        note: message,
-      };
-      (model.capabilities as Record<string, unknown>).__imageGenerationStatus = "unknown";
-      (model.capabilities as Record<string, unknown>).__imageEditStatus = "unknown";
-      (model.capabilities as Record<string, unknown>).__probeNote = message;
-    }
-  });
-
-  for (const model of skipped) {
-    const note = "为了保证速度，本次仅探测优先级更高的图片模型。";
-    model.endpointSupport = {
-      imageGeneration: "unknown",
-      imageEdit: "unknown",
-      note,
-    };
-    (model.capabilities as Record<string, unknown>).__imageGenerationStatus = "unknown";
-    (model.capabilities as Record<string, unknown>).__imageEditStatus = "unknown";
-    (model.capabilities as Record<string, unknown>).__probeNote = note;
+  const seen = new Set(models.map((model) => model.modelId.toLowerCase()));
+  const missingPresets = OPENAI_IMAGE_MODEL_PRESETS.filter((model) => !seen.has(model.id.toLowerCase()));
+  if (missingPresets.length === 0) {
+    return models;
   }
 
-  return enriched;
+  const now = new Date();
+  const supplemental = enrichModelEndpointSupport(normalizeDetectedModels(missingPresets)).map((model) => ({
+    id: `${providerId}:preset:${model.modelId}`,
+    providerConfigId: providerId,
+    modelId: model.modelId,
+    label: model.label,
+    capabilities: model.capabilities as Record<string, unknown>,
+    roles: model.roles as Record<string, unknown>,
+    quality: model.quality ?? null,
+    latency: model.latency ?? null,
+    cost: model.cost ?? null,
+    isAvailable: model.isAvailable,
+    isDefaultAnalysis: false,
+    isDefaultPlanning: false,
+    isDefaultHeroImage: false,
+    isDefaultDetailImage: false,
+    isDefaultImageEdit: false,
+    createdAt: now,
+    updatedAt: now,
+    endpointSupport: model.endpointSupport ?? {
+      imageGeneration: "unknown",
+      imageEdit: "unknown",
+      note: PASSIVE_IMAGE_CAPABILITY_NOTE,
+    },
+  })) as T[];
+
+  return [...models, ...supplemental];
+}
+
+const PASSIVE_IMAGE_CAPABILITY_NOTE =
+  "未发起真实图像接口调用；仅根据 /models 返回和模型名称识别能力，实际可用性会在生成时验证。";
+
+function enrichModelEndpointSupport(models: ProviderModelSnapshot[]) {
+  return models.map((model) => {
+    const capabilities = { ...(model.capabilities as Record<string, unknown>) };
+    delete capabilities.real_image_gen;
+    delete capabilities.real_image_edit;
+
+    const hasImageGeneration = Boolean(capabilities.image_gen);
+    const hasImageEdit = Boolean(capabilities.image_edit);
+    const endpointSupport = {
+      imageGeneration: hasImageGeneration ? ("unknown" as const) : ("not_applicable" as const),
+      imageEdit: hasImageEdit ? ("unknown" as const) : ("not_applicable" as const),
+      note: hasImageGeneration || hasImageEdit ? PASSIVE_IMAGE_CAPABILITY_NOTE : null,
+    };
+
+    capabilities.__imageGenerationStatus = endpointSupport.imageGeneration;
+    capabilities.__imageEditStatus = endpointSupport.imageEdit;
+    capabilities.__probeNote = endpointSupport.note;
+
+    return {
+      ...model,
+      capabilities: capabilities as CapabilityMap,
+      roles: { ...model.roles } as ModelRoleMap,
+      endpointSupport,
+    };
+  }) satisfies ModelDetectionResult[];
 }
 
 async function replaceProviderModels(
@@ -252,7 +276,7 @@ export async function resolveProviderConnectionInput(
 export async function discoverProviderModels(input: ProviderConnectionInput) {
   const adapter = new OpenAICompatibleAdapter(input.baseUrl, input.apiKey);
   const models = await adapter.listModels();
-  const normalized = await enrichModelEndpointSupport(adapter, normalizeDetectedModels(models));
+  const normalized = enrichModelEndpointSupport(normalizeDetectedModels(mergeDiscoveredModels(input.baseUrl, models)));
   return {
     models: normalized,
     recommendations: recommendDefaultModels(normalized),
@@ -263,6 +287,7 @@ export async function saveProviderConfig(
   input: ProviderConnectionInput & {
     id?: string | null;
     isActive?: boolean;
+    discoveredModels?: ProviderModelSnapshot[];
     defaultAssignments?: {
       analysisModelId?: string | null;
       planningModelId?: string | null;
@@ -272,7 +297,13 @@ export async function saveProviderConfig(
     };
   },
 ) {
-  const discovered = await discoverProviderModels(input);
+  const discoveredModels = input.discoveredModels?.length
+    ? enrichModelEndpointSupport(input.discoveredModels)
+    : (await discoverProviderModels(input)).models;
+  const discovered = {
+    models: discoveredModels,
+    recommendations: recommendDefaultModels(discoveredModels),
+  };
   const nextIsActive = input.isActive ?? true;
 
   if (nextIsActive) {
@@ -325,7 +356,11 @@ export async function getAllProviderConfigs() {
       ...provider,
       apiKey,
       maskedApiKey: maskApiKey(apiKey),
-      models: hydrateProviderModels(provider.models),
+      models: mergeHydratedProviderModels(
+        provider.id,
+        provider.baseUrl,
+        hydrateProviderModels(provider.models) as RuntimeProviderModel[],
+      ),
     };
   });
 }
@@ -347,7 +382,11 @@ export async function getActiveProviderConfig() {
     ...provider,
     apiKey,
     maskedApiKey: maskApiKey(apiKey),
-    models: hydrateProviderModels(provider.models),
+    models: mergeHydratedProviderModels(
+      provider.id,
+      provider.baseUrl,
+      hydrateProviderModels(provider.models) as RuntimeProviderModel[],
+    ),
   };
 }
 

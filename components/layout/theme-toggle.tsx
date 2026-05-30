@@ -117,7 +117,7 @@ export function FloatingThemeToggle() {
       type="button"
       onClick={toggle}
       className={cn(
-        "group inline-flex min-w-[150px] items-center gap-3 rounded-2xl border px-3.5 py-3 text-sm shadow-lg backdrop-blur-xl transition-all duration-200",
+        "group inline-flex h-12 w-12 items-center justify-center rounded-2xl border text-sm shadow-lg backdrop-blur-xl transition-all duration-200",
         "border-slate-200/90 bg-white/92 text-slate-700 hover:-translate-y-0.5 hover:border-slate-300 hover:bg-white",
         "dark:border-white/10 dark:bg-[#0f0f10]/88 dark:text-slate-200 dark:hover:border-white/20 dark:hover:bg-[#161618]",
       )}
@@ -133,12 +133,6 @@ export function FloatingThemeToggle() {
         )}
       >
         {isDark ? <MoonStar className="h-4 w-4" /> : <SunMedium className="h-4 w-4" />}
-      </span>
-      <span className="text-left leading-none">
-        <span className="block font-medium">{isDark ? "黑夜风格" : "白天风格"}</span>
-        <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">
-          点击切换
-        </span>
       </span>
     </button>
   );
