@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useState } from "react";
 import { Loader2, UploadCloud } from "lucide-react";
@@ -136,13 +136,13 @@ export function QuickStartWorkspace() {
 
           <label
             htmlFor="quick-start-file"
-            className="flex min-h-[320px] flex-1 cursor-pointer flex-col items-center justify-center rounded-[1.5rem] transition hover:bg-slate-50/80 dark:hover:bg-white/[0.04]"
+            className="flex min-h-[420px] flex-1 cursor-pointer flex-col items-center justify-center rounded-[1.5rem] transition hover:bg-slate-50/80 dark:hover:bg-white/[0.04]"
           >
             {previewUrl ? (
               <div className="flex flex-col items-center justify-center">
-                <div className="w-[170px] overflow-hidden rounded-[1.2rem] bg-slate-100 shadow-[0_20px_50px_-30px_rgba(0,0,0,0.32)] dark:bg-white/8 md:w-[200px]">
+                <div className="w-[min(78vw,340px)] overflow-hidden rounded-[1.5rem] bg-slate-100 shadow-[0_24px_70px_-34px_rgba(0,0,0,0.42)] dark:bg-white/8 md:w-[420px] xl:w-[460px]">
                   <div className="aspect-square">
-                    <img src={previewUrl} alt={file?.name ?? "主商品图预览"} className="h-full w-full object-cover" />
+                    <img src={previewUrl} alt={file?.name ?? "主商品图预览"} className="h-full w-full object-contain" />
                   </div>
                 </div>
 

@@ -11,8 +11,8 @@ type ProviderPageData = Array<{
   id: string;
   name: string;
   baseUrl: string;
-  apiKey: string;
-  maskedApiKey: string;
+  apiKey?: string;
+  maskedApiKey?: string;
   isActive: boolean;
   updatedAt: string | Date;
   models: Array<{
@@ -37,6 +37,11 @@ type ProviderPageData = Array<{
   }>;
 }>;
 
+type RuntimeConfig = {
+  baseUrlLocked: boolean;
+  lockedBaseUrl: string | null;
+};
+
 function LoadingState() {
   return (
     <Card>
@@ -51,6 +56,10 @@ function LoadingState() {
 export default function ProviderSettingsPageClient() {
   const [mounted, setMounted] = useState(false);
   const [providers, setProviders] = useState<ProviderPageData>([]);
+  const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig>({
+    baseUrlLocked: false,
+    lockedBaseUrl: null,
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -78,7 +87,9 @@ export default function ProviderSettingsPageClient() {
         }
 
         if (!aborted) {
-          setProviders(payload.data ?? []);
+          const data = payload.data;
+          setProviders(Array.isArray(data) ? data : data?.providers ?? []);
+          setRuntimeConfig(data?.runtime ?? { baseUrlLocked: false, lockedBaseUrl: null });
         }
       } catch (err) {
         if (!aborted) {
@@ -111,7 +122,7 @@ export default function ProviderSettingsPageClient() {
       <PageHeader
         eyebrow="模型服务配置"
         title="Provider 与模型配置中心"
-        description="页面会优先展示已保存的历史服务与模型快照，方便你快速切换。需要从当前代理商重新发现模型并识别能力时，再点击“发现模型并识别能力”。"
+        description="页面展示已保存的 Provider 与模型快照。API Key 仅保存在当前浏览器；私有化部署可通过 LOCK_BASE_URL 锁定统一 API 通道。"
       />
 
       {loading ? (
@@ -124,7 +135,7 @@ export default function ProviderSettingsPageClient() {
           </CardContent>
         </Card>
       ) : (
-        <ProviderSettings initialProviders={providers} />
+        <ProviderSettings initialProviders={providers} runtimeConfig={runtimeConfig} />
       )}
     </div>
   );

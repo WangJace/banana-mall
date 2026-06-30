@@ -223,6 +223,14 @@ function omitTemperature<T extends Record<string, unknown>>(body: T) {
   return rest;
 }
 
+function shouldOmitTemperatureForModel(model: string) {
+  return /^gpt-5/i.test(model);
+}
+
+function withOptionalTemperature<T extends Record<string, unknown>>(model: string, body: T, temperature: number) {
+  return shouldOmitTemperatureForModel(model) ? body : { ...body, temperature };
+}
+
 function buildMessages(input: TextRequest | StructuredRequest<unknown>): ChatMessage[] {
   const content: ChatMessage["content"] =
     input.images?.length
@@ -544,8 +552,14 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     return finalResponse;
   }
 
-  private async requestJson<T>(path: string, init?: RequestInit, timeoutMs?: number, monitor?: AiMonitorContext) {
-    const response = await this.requestRaw(path, init, timeoutMs, monitor);
+  private async requestJson<T>(
+    path: string,
+    init?: RequestInit,
+    timeoutMs?: number,
+    monitor?: AiMonitorContext,
+    options?: { suppressUsageLog?: boolean },
+  ) {
+    const response = await this.requestRaw(path, init, timeoutMs, monitor, options);
 
     if (!response.ok) {
       throw new Error(`Provider request failed (${response.status}): ${response.body}`);
@@ -558,12 +572,13 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     body: Record<string, unknown>,
     timeoutMs?: number,
     monitor?: AiMonitorContext,
+    options?: { suppressUsageLog?: boolean },
   ) {
     try {
       return await this.requestJson<T>("/chat/completions", {
         method: "POST",
         body: JSON.stringify(body),
-      }, timeoutMs, monitor);
+      }, timeoutMs, monitor, options);
     } catch (error) {
       if (!("temperature" in body) || !isUnsupportedTemperatureError(error)) {
         throw error;
@@ -572,10 +587,9 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       return this.requestJson<T>("/chat/completions", {
         method: "POST",
         body: JSON.stringify(omitTemperature(body)),
-      }, timeoutMs, monitor);
+      }, timeoutMs, monitor, options);
     }
   }
-
   private async requestMultipartJson<T>(
     path: string,
     fields: Record<string, string | number | boolean | null | undefined>,
@@ -742,11 +756,12 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
 
   private async repairStructuredOutput<T>(input: StructuredRequest<T>, raw: string, reason: string) {
     const payload = await this.requestChatCompletion(
-      {
-        model: input.model,
-        temperature: 0,
-        response_format: { type: "json_object" },
-        messages: [
+      withOptionalTemperature(
+        input.model,
+        {
+          model: input.model,
+          response_format: { type: "json_object" },
+          messages: [
           {
             role: "system",
             content: "You repair malformed model output into strict valid JSON. Return JSON only.",
@@ -762,9 +777,13 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
               raw,
             ].join("\n"),
           },
-        ],
-      },
+          ],
+        },
+        0,
+      ),
       Math.min(input.timeoutMs ?? 60000, 45000),
+      input.monitor,
+      { suppressUsageLog: input.suppressUsageLog },
     );
 
     const repairedRaw = extractTextContent(payload);
@@ -942,13 +961,13 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
 
   async generateText(input: TextRequest) {
     const payload = await this.requestChatCompletion(
-      {
+      withOptionalTemperature(input.model, {
         model: input.model,
         messages: buildMessages(input),
-        temperature: 0.4,
-      },
+      }, 0.4),
       input.timeoutMs ?? 60000,
       input.monitor,
+      { suppressUsageLog: input.suppressUsageLog },
     );
 
     return {
@@ -958,14 +977,14 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
 
   async generateStructured<T>(input: StructuredRequest<T>) {
     const payload = await this.requestChatCompletion(
-      {
+      withOptionalTemperature(input.model, {
         model: input.model,
         messages: buildMessages(input),
-        temperature: 0.2,
         response_format: { type: "json_object" },
-      },
+      }, 0.2),
       input.timeoutMs ?? 60000,
       input.monitor,
+      { suppressUsageLog: input.suppressUsageLog },
     );
 
     const raw = extractTextContent(payload);
@@ -1020,6 +1039,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     images: string[];
     size?: string;
     aspectRatio?: "1:1" | "3:4" | "9:16";
+    timeoutMs?: number;
     monitor?: AiMonitorContext;
   }) {
     const fields = {
@@ -1035,7 +1055,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
           data?: Array<{ url?: string; b64_json?: string; revised_prompt?: string }>;
         }>("/images/edits", fields, input.images, {
           imageFieldName,
-          timeoutMs: 90000,
+          timeoutMs: input.timeoutMs ?? 120000,
           monitor: input.monitor,
         });
 
@@ -1084,10 +1104,12 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
             images: referenceImages,
             size: input.size,
             aspectRatio: input.aspectRatio,
+            timeoutMs: input.timeoutMs,
             monitor: input.monitor,
           });
         } catch (error) {
-          referenceErrors.push(error instanceof Error ? error.message : "Unknown GPT Image reference generation error");
+          const message = error instanceof Error ? error.message : "Unknown GPT Image reference generation error";
+          throw new Error(`GPT Image reference generation via /images/edits failed: ${message}`);
         }
       }
 
@@ -1138,7 +1160,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
           }>(attempt.path, {
             method: "POST",
             body: JSON.stringify(attempt.body),
-          }, undefined, input.monitor);
+          }, input.timeoutMs ?? 120000, input.monitor);
 
           return extractImageResult(payload);
         } catch (error) {
@@ -1159,7 +1181,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
           prompt: input.prompt,
           size: resolveOpenAiSize(input),
         }),
-      }, undefined, input.monitor);
+      }, input.timeoutMs ?? 120000, input.monitor);
 
       return extractImageResult(payload);
     } catch (error) {
@@ -1205,6 +1227,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
           images: [input.image, ...(input.referenceImages ?? [])],
           size: input.size,
           aspectRatio: input.aspectRatio,
+          timeoutMs: input.timeoutMs,
           monitor: input.monitor,
         });
       } catch {
@@ -1255,7 +1278,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
         }>(attempt.path, {
           method: "POST",
           body: JSON.stringify(attempt.body),
-        }, undefined, input.monitor);
+        }, input.timeoutMs ?? 120000, input.monitor);
 
         return extractImageResult(payload);
       } catch (error) {

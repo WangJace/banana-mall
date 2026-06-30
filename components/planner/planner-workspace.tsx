@@ -27,6 +27,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { contentLanguageLabels, type ContentLanguage } from "@/lib/utils/content-language";
+import { buildDefaultVisualStyleGuide, normalizeVisualStyleGuide, type VisualStyleGuide } from "@/lib/utils/visual-style-guide";
 import { sectionTypeLabels } from "@/types/domain";
 
 interface PlannerWorkspaceProps {
@@ -113,6 +114,15 @@ function getGenerationSettings(project: any): GenerationSettings {
   };
 }
 
+function getVisualStyleGuide(project: any): VisualStyleGuide {
+  const fallback = buildDefaultVisualStyleGuide({
+    productName: project?.analysis?.normalizedResult?.productName ?? project?.name,
+    styleLabel: project?.style,
+    platformLabel: project?.platform,
+  });
+  return normalizeVisualStyleGuide(project?.modelSnapshot?.visualStyleGuide, fallback);
+}
+
 function progressPercent(progress: BulkProgressState | null) {
   if (!progress || progress.total === 0) {
     return 0;
@@ -122,7 +132,10 @@ function progressPercent(progress: BulkProgressState | null) {
 }
 
 function isProviderWideImageFailure(message: string) {
-  return /当前 Provider 没有可用的真实图片生成端点|所有可用图片模型都生成失败/i.test(message);
+  return (
+    message.includes("\u5f53\u524d Provider \u6ca1\u6709\u53ef\u7528\u7684\u771f\u5b9e\u56fe\u7247\u751f\u6210\u7aef\u70b9") ||
+    message.includes("\u5f53\u524d Provider \u6ca1\u6709\u8bc6\u522b\u5230\u53ef\u7528\u4e8e\u771f\u5b9e\u56fe\u7247\u751f\u6210\u7684\u6a21\u578b")
+  );
 }
 
 function getGenerationLabel(section: any) {
@@ -139,8 +152,10 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
   const [planning, setPlanning] = useState(false);
   const [bulkGenerating, setBulkGenerating] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
+  const [regeneratingVisualStyleGuide, setRegeneratingVisualStyleGuide] = useState(false);
   const [previewConfig, setPreviewConfig] = useState<PreviewConfig>(getPreviewConfig(project));
   const [generationSettings, setGenerationSettings] = useState<GenerationSettings>(getGenerationSettings(project));
+  const [visualStyleGuide, setVisualStyleGuide] = useState<VisualStyleGuide>(getVisualStyleGuide(project));
   const [bulkProgress, setBulkProgress] = useState<BulkProgressState | null>(null);
   const [runningSectionId, setRunningSectionId] = useState<string | null>(null);
   const [planningProgress, setPlanningProgress] = useState<PlanningProgressState>({
@@ -174,6 +189,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
       setSections(payload.data.sections ?? []);
       setPreviewConfig(getPreviewConfig(payload.data));
       setGenerationSettings(getGenerationSettings(payload.data));
+      setVisualStyleGuide(getVisualStyleGuide(payload.data));
     }
   };
 
@@ -206,6 +222,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
         setSections(payload.data.sections ?? []);
         setPreviewConfig(getPreviewConfig(payload.data));
         setGenerationSettings(getGenerationSettings(payload.data));
+      setVisualStyleGuide(getVisualStyleGuide(payload.data));
       }
 
       if (!options?.silent) {
@@ -221,6 +238,28 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
     }
   };
 
+  const regenerateVisualStyleGuide = async () => {
+    setRegeneratingVisualStyleGuide(true);
+    try {
+      const response = await fetch(`/api/projects/${project.id}/visual-style-guide`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const payload = await response.json();
+      if (!payload.success) {
+        throw new Error(payload.error?.message ?? "统一视觉风格重算失败");
+      }
+
+      setVisualStyleGuide(normalizeVisualStyleGuide(payload.data.visualStyleGuide, visualStyleGuide));
+      await refreshProject();
+      toast.success("已重新生成统一视觉风格");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "统一视觉风格重算失败");
+    } finally {
+      setRegeneratingVisualStyleGuide(false);
+    }
+  };
   const autoPlan = async () => {
     setPlanning(true);
     setPlanningProgress({
@@ -261,6 +300,10 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
       if (payload.data.previewConfig) {
         setPreviewConfig(payload.data.previewConfig);
       }
+      if (payload.data.visualStyleGuide) {
+        setVisualStyleGuide(normalizeVisualStyleGuide(payload.data.visualStyleGuide, visualStyleGuide));
+      }
+      await refreshProject();
 
       toast.success(
         payload.data?.fallbackMode === "template_plan"
@@ -439,7 +482,8 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
     });
 
     try {
-      for (const section of generationQueue) {
+      for (let sectionIndex = 0; sectionIndex < generationQueue.length; sectionIndex += 1) {
+        const section = generationQueue[sectionIndex];
         setBulkProgress((current) =>
           current
             ? {
@@ -475,11 +519,11 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
           );
 
           if (isProviderWideImageFailure(message)) {
-            toast.error(`已在第一个模块处停止批量生成：${message}`);
+            toast.error(`\u5df2\u5728\u7b2c ${sectionIndex + 1}/${generationQueue.length} \u4e2a\u6a21\u5757\u5904\u505c\u6b62\u6279\u91cf\u751f\u6210\uff1a${message}`);
             return;
           }
 
-          toast.error(message);
+          toast.error(`\u7b2c ${sectionIndex + 1}/${generationQueue.length} \u4e2a\u6a21\u5757\u751f\u6210\u5931\u8d25\uff1a${message}`);
           continue;
         }
 
@@ -521,6 +565,56 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
 
       <Card>
         <CardHeader>
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="space-y-1">
+              <CardTitle>统一视觉风格</CardTitle>
+              <CardDescription>
+                由 Agent 根据商品分析和主商品图自动决策，后续头图、详情页、重绘和翻译都会沿用这套视觉系统。
+              </CardDescription>
+            </div>
+            <Button
+              variant="outline"
+              onClick={regenerateVisualStyleGuide}
+              disabled={regeneratingVisualStyleGuide || planning || bulkGenerating}
+            >
+              {regeneratingVisualStyleGuide ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+              {regeneratingVisualStyleGuide ? "重算中..." : "AI 重新生成统一风格"}
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <NoticeCard
+            variant="info"
+            title="生成时会自动遵循统一风格"
+            description="用户无需手动填写每张图的风格。Agent 会控制色彩、背景、光影、字体、CTA、商品结构和负面约束，保证整套详情页一致。"
+          />
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            <div className="rounded-2xl border border-border bg-muted/40 p-4">
+              <p className="text-xs text-muted-foreground">风格名称</p>
+              <p className="mt-2 text-sm font-medium">{visualStyleGuide.styleName}</p>
+            </div>
+            <div className="rounded-2xl border border-border bg-muted/40 p-4 md:col-span-2">
+              <p className="text-xs text-muted-foreground">色彩与背景</p>
+              <p className="mt-2 line-clamp-3 text-sm leading-6">{visualStyleGuide.colorPalette} {visualStyleGuide.backgroundSystem}</p>
+            </div>
+            <div className="rounded-2xl border border-border bg-muted/40 p-4">
+              <p className="text-xs text-muted-foreground">光影与镜头</p>
+              <p className="mt-2 line-clamp-3 text-sm leading-6">{visualStyleGuide.lighting} {visualStyleGuide.cameraLanguage}</p>
+            </div>
+            <div className="rounded-2xl border border-border bg-muted/40 p-4">
+              <p className="text-xs text-muted-foreground">商品表现</p>
+              <p className="mt-2 line-clamp-3 text-sm leading-6">{visualStyleGuide.productRenderingRules}</p>
+            </div>
+            <div className="rounded-2xl border border-border bg-muted/40 p-4">
+              <p className="text-xs text-muted-foreground">负面约束</p>
+              <p className="mt-2 line-clamp-3 text-sm leading-6">{visualStyleGuide.negativeStyleConstraints}</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>页面规划与生成</CardTitle>
           <CardDescription>规划页会按照最终产出结构拆分为头图、详情页和页面壳层，避免新增模块与最终导出结构不一致。</CardDescription>
         </CardHeader>
@@ -554,11 +648,11 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
                     <>
                     <NoticeCard
                       variant="warning"
-                      title="当前实际结构与分析页配置不完全一致"
-                      description="重新执行 AI 自动规划后，系统会按分析页保存的数量与比例重新整理头图和详情页结构。"
+                      title="当前结构与分析页配置不一致"
+                      description="请运行下方的 AI 自动规划，让系统按分析页保存的数量与比例重新整理头图和详情页结构。"
                     />
                     <div className="hidden">
-                      当前实际结构和分析页配置不完全一致。重新执行 AI 自动规划后，会按分析页配置重新整理头图与详情页结构。
+                      当前结构与分析页配置不一致，请运行下方的 AI 自动规划同步结构。
                     </div>
                     </>
                   ) : null}
@@ -644,7 +738,7 @@ export function PlannerWorkspace({ project }: PlannerWorkspaceProps) {
               当前已规划 <span className="font-semibold text-slate-950 dark:text-white">{heroSections.length}</span> 张头图、<span className="font-semibold text-slate-950 dark:text-white">{detailSections.length}</span> 张详情页，已生成 <span className="font-semibold text-slate-950 dark:text-white">{generatedCount}</span> 个模块图。
             </p>
             <p className="mt-3 text-xs leading-6 text-slate-600 dark:text-slate-400">
-              一键生成会按当前规划结构逐个请求真实 AI 出图。头图固定按 1:1 生成，详情页按分析页保存的比例生成；页面壳层不参与出图。
+              一键生成会按当前规划结构逐个请求真实 AI 出图，并统一遵循上方视觉风格规范。头图固定按 1:1 生成，详情页按分析页保存的比例生成；页面壳层不参与出图。
             </p>
 
             {bulkProgress ? (

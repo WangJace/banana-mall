@@ -65,10 +65,8 @@ const COST_EFFECTIVE_TEXT_MODELS = [
   "gpt-4.1-mini",
   "gpt-4.1-nano",
   "gpt-4o-mini",
-  "gpt-5.4-mini",
-  "gemini-2.5-flash",
-  "gemini-2.0-flash-001",
-  "gemini-2.0-flash",
+  "gpt-4o",
+  "gpt-4.1",
 ];
 
 function findCostEffectiveTextModel(models: ModelDetectionResult[]) {

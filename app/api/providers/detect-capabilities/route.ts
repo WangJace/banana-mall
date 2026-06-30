@@ -5,6 +5,7 @@ import { normalizeDetectedModels } from "@/lib/ai/capability-detector";
 import { discoverProviderModels } from "@/lib/services/provider-service";
 import { providerInputSchema } from "@/lib/validations/provider";
 import { handleRouteError, ok } from "@/lib/utils/route";
+import { withProviderCredentials } from "@/lib/services/provider-runtime";
 
 const detectSchema = z.union([
   providerInputSchema,
@@ -19,14 +20,16 @@ const detectSchema = z.union([
 ]);
 
 export async function POST(request: NextRequest) {
-  try {
+  return withProviderCredentials(request, async () => {
+    try {
     const input = detectSchema.parse(await request.json());
     const result =
       "models" in input
         ? { models: normalizeDetectedModels(input.models) }
         : await discoverProviderModels(input);
     return ok(result);
-  } catch (error) {
-    return handleRouteError(error);
-  }
+    } catch (error) {
+      return handleRouteError(error);
+    }
+  });
 }

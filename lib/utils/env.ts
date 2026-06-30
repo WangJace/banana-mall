@@ -2,11 +2,14 @@ import { z } from "zod";
 
 const envSchema = z.object({
   DATABASE_URL: z.string().default("file:./dev.db"),
-  APP_SECRET: z.string().min(12).default("banana-mall-local-secret"),
+  APP_SECRET: z.string().min(12).default("MxPage-local-secret"),
   STORAGE_ROOT: z.string().default("./storage"),
   APP_RUNTIME: z.enum(["web", "desktop"]).default("web"),
   APP_USER_DATA_DIR: z.string().optional(),
-  NEXT_PUBLIC_APP_NAME: z.string().default("banana-mall"),
+  NEXT_PUBLIC_APP_NAME: z.string().default("MxPage"),
+  LOCK_BASE_URL: z.string().trim().url().optional(),
+  FORCED_API_BASE: z.string().trim().url().optional(),
+  FORCED_API_BASE_URL: z.string().trim().url().optional(),
 });
 
 export const env = envSchema.parse({
@@ -16,4 +19,7 @@ export const env = envSchema.parse({
   APP_RUNTIME: process.env.APP_RUNTIME,
   APP_USER_DATA_DIR: process.env.APP_USER_DATA_DIR,
   NEXT_PUBLIC_APP_NAME: process.env.NEXT_PUBLIC_APP_NAME,
+  LOCK_BASE_URL: process.env.LOCK_BASE_URL,
+  FORCED_API_BASE: process.env.FORCED_API_BASE,
+  FORCED_API_BASE_URL: process.env.FORCED_API_BASE_URL,
 });

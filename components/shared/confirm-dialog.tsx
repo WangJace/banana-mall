@@ -1,6 +1,7 @@
-"use client";
+﻿"use client";
 
-import { ReactNode } from "react";
+import { ReactNode, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -30,11 +31,17 @@ export function ConfirmDialog({
   onCancel,
   icon,
 }: ConfirmDialogProps) {
-  if (!open) {
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!mounted || !open) {
     return null;
   }
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
       <button
         type="button"
@@ -72,6 +79,7 @@ export function ConfirmDialog({
           </Button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

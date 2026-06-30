@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { ImagePlus, Loader2, MessageCircle, RotateCcw, Save, ShoppingCart, Sparkles, Star } from "lucide-react";
+import { ImagePlus, Languages, Loader2, MessageCircle, RotateCcw, Save, ShoppingCart, Sparkles, Star } from "lucide-react";
 
 import { StatusBadge } from "@/components/shared/status-badge";
 import { Badge } from "@/components/ui/badge";
@@ -12,12 +12,24 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useEditorStore } from "@/hooks/use-editor-store";
-import { normalizeContentLanguage, type ContentLanguage } from "@/lib/utils/content-language";
+import { contentLanguageLabels, contentLanguageOptions, normalizeContentLanguage, type ContentLanguage } from "@/lib/utils/content-language";
 
 interface EditorWorkspaceProps {
   project: any;
 }
 
+type TaskPayload = {
+  id: string;
+  status: "PENDING" | "RUNNING" | "SUCCESS" | "FAILED" | "CANCELED";
+  outputPayload?: {
+    totalItems?: number;
+    completedItems?: number;
+    failedItems?: number;
+    currentStep?: string;
+    targetLanguage?: ContentLanguage;
+  } | null;
+  errorMessage?: string | null;
+};
 type ImageAspectRatio = "3:4" | "9:16";
 type SectionKind =
   | "hero"
@@ -38,6 +50,7 @@ interface PreviewConfig {
   imageAspectRatio: ImageAspectRatio;
   contentLanguage: ContentLanguage;
 }
+
 
 const sectionTypeOptions: SectionKind[] = [
   "hero",
@@ -76,7 +89,7 @@ const assetTypeLabels: Record<string, string> = {
   EXPORTED: "导出文件",
 };
 
-const previewTexts: Record<
+const previewTexts: Partial<Record<
   ContentLanguage,
   {
     priceTag: string;
@@ -91,7 +104,7 @@ const previewTexts: Record<
     addToCart: string;
     buyNow: string;
   }
-> = {
+>> = {
   "zh-CN": {
     priceTag: "限时上新",
     reviewsTitle: "用户评价",
@@ -243,6 +256,10 @@ function buildProductDescription(analysis: any, sections: any[]) {
   return candidates.join(" · ");
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function getActionText(action: string | null) {
   if (action === "generate") return "正在生成当前模块图，请稍候...";
   if (action === "regenerate") return "正在重新生成当前模块图，请稍候...";
@@ -256,6 +273,7 @@ export function EditorWorkspace({ project: initialProject }: EditorWorkspaceProp
   const [checkedReferences, setCheckedReferences] = useState<string[]>([]);
   const [runningAction, setRunningAction] = useState<string | null>(null);
   const [selectedHeroIndex, setSelectedHeroIndex] = useState(0);
+  const [translationTargetLanguage, setTranslationTargetLanguage] = useState<ContentLanguage>("en-US");
   const { selectedSectionId, setSelectedSectionId } = useEditorStore();
   useEffect(() => {
     if (!selectedSectionId && initialProject.sections[0]) {
@@ -264,7 +282,7 @@ export function EditorWorkspace({ project: initialProject }: EditorWorkspaceProp
   }, [initialProject.sections, selectedSectionId, setSelectedSectionId]);
 
   const previewConfig = useMemo(() => getPreviewConfig(project), [project]);
-  const previewUi = useMemo(() => previewTexts[previewConfig.contentLanguage], [previewConfig.contentLanguage]);
+  const previewUi = useMemo(() => previewTexts[previewConfig.contentLanguage] ?? previewTexts["en-US"]!, [previewConfig.contentLanguage]);
   const selectedSection = useMemo(
     () => project.sections.find((section: any) => section.id === selectedSectionId) ?? project.sections[0] ?? null,
     [project.sections, selectedSectionId],
@@ -285,6 +303,7 @@ export function EditorWorkspace({ project: initialProject }: EditorWorkspaceProp
     [project.sections],
   );
   const hasGeneratedImage = Boolean(selectedSection?.imageUrl);
+  const generatedSections = useMemo(() => project.sections.filter((section: any) => Boolean(section.imageUrl)), [project.sections]);
 
   useEffect(() => {
     if (selectedHeroIndex >= galleryImages.length) {
@@ -350,7 +369,7 @@ export function EditorWorkspace({ project: initialProject }: EditorWorkspaceProp
     }
   };
 
-  const runImageEdit = async (editMode: "repaint" | "enhance") => {
+  const runImageEdit = async (editMode: "repaint" | "enhance" | "translate", targetLanguage?: ContentLanguage) => {
     if (!selectedSection) return;
     setRunningAction(editMode);
 
@@ -358,7 +377,7 @@ export function EditorWorkspace({ project: initialProject }: EditorWorkspaceProp
       const response = await fetch(`/api/projects/${project.id}/sections/${selectedSection.id}/edit`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ referenceAssetIds: checkedReferences, editMode }),
+        body: JSON.stringify({ referenceAssetIds: checkedReferences, editMode, targetLanguage }),
       });
       const payload = await response.json();
       if (!payload.success) {
@@ -368,9 +387,66 @@ export function EditorWorkspace({ project: initialProject }: EditorWorkspaceProp
       if (payload.data?.generationMode === "svg_fallback") {
         toast.warning("当前 Provider 没有可用真实图片编辑端点，本次结果为 SVG 兜底预览。");
       } else {
-        toast.success(editMode === "repaint" ? "已基于当前图完成重绘，并自动保存新版本" : "已基于当前图完成增强，并自动保存新版本");
+        toast.success(editMode === "translate" ? "已将当前图转为目标语言，并自动保存新版本" : editMode === "repaint" ? "已基于当前图完成重绘，并自动保存新版本" : "已基于当前图完成增强，并自动保存新版本");
       }
       await refreshProject();
+    } finally {
+      setRunningAction(null);
+    }
+  };
+
+
+  const translateGeneratedDetailPage = async () => {
+    if (generatedSections.length === 0) {
+      toast.error("请先生成至少一张详情页图片");
+      return;
+    }
+
+    setRunningAction("translate-page");
+    try {
+      const response = await fetch(`/api/projects/${project.id}/translate-page`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          referenceAssetIds: checkedReferences,
+          targetLanguage: translationTargetLanguage,
+        }),
+      });
+      const created = await response.json();
+      if (!created.success || !created.data?.id) {
+        throw new Error(created.error?.message ?? "整页语言转换任务启动失败");
+      }
+
+      for (;;) {
+        const taskResponse = await fetch(`/api/tasks/${created.data.id}`, { cache: "no-store" });
+        const taskPayload = await taskResponse.json();
+        if (!taskPayload.success || !taskPayload.data) {
+          throw new Error(taskPayload.error?.message ?? "读取整页语言转换任务失败");
+        }
+
+        const task = taskPayload.data as TaskPayload;
+        const output = task.outputPayload ?? {};
+        if (task.status === "SUCCESS") {
+          const successCount = Number(output.completedItems ?? 0);
+          const failedCount = Number(output.failedItems ?? 0);
+          if (successCount > 0) {
+            toast.success(`已翻译 ${successCount}/${generatedSections.length} 张详情页图片为${contentLanguageLabels[translationTargetLanguage]}`);
+            await refreshProject();
+          }
+          if (failedCount > 0) {
+            toast.error(`${failedCount} 张图片翻译失败，可在任务记录中重试。`);
+          }
+          break;
+        }
+
+        if (task.status === "FAILED" || task.status === "CANCELED") {
+          throw new Error(task.errorMessage ?? "整页语言转换失败");
+        }
+
+        await sleep(1800);
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "整页语言转换失败");
     } finally {
       setRunningAction(null);
     }
@@ -559,7 +635,7 @@ export function EditorWorkspace({ project: initialProject }: EditorWorkspaceProp
                     </section>
                   ))}
                   <div className="bg-white px-4 py-4 text-center text-[10px] font-medium uppercase tracking-[0.18em] text-slate-400">
-                    Powered by MatrixInspire
+                    Powered by MxPage
                   </div>
                 </div>
               </div>
@@ -704,6 +780,39 @@ export function EditorWorkspace({ project: initialProject }: EditorWorkspaceProp
                     <Button onClick={() => runImageEdit("enhance")} disabled={!hasGeneratedImage || Boolean(runningAction)} variant="outline" className="gap-2">
                       {runningAction === "enhance" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
                       基于当前图增强
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-border bg-muted/30 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-medium">详情页语言转换</p>
+                      <p className="mt-1 text-xs text-muted-foreground">使用图像编辑能力逐张替换图内文字，尽量保留原构图、产品和视觉风格。</p>
+                    </div>
+                    <Badge variant="outline">{generatedSections.length} 张</Badge>
+                  </div>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_auto]">
+                    <select
+                      className="flex h-10 w-full rounded-xl border border-input bg-white px-3 text-sm dark:bg-white/6 dark:text-slate-100"
+                      value={translationTargetLanguage}
+                      onChange={(event) => setTranslationTargetLanguage(normalizeContentLanguage(event.target.value))}
+                    >
+                      {contentLanguageOptions.map((language) => (
+                        <option key={language} value={language}>
+                          {contentLanguageLabels[language]}
+                        </option>
+                      ))}
+                    </select>
+                    <Button
+                      type="button"
+                      onClick={translateGeneratedDetailPage}
+                      disabled={generatedSections.length === 0 || Boolean(runningAction)}
+                      variant="outline"
+                      className="gap-2"
+                    >
+                      {runningAction === "translate-page" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Languages className="h-4 w-4" />}
+                      一键转换整页
                     </Button>
                   </div>
                 </div>

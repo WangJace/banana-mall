@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { useRouter } from "next/navigation";
@@ -21,46 +21,56 @@ type ProjectCreateValues = z.input<typeof projectCreateSchema>;
 type UploadBucketKey = "MAIN" | "ANGLE" | "DETAIL" | "REFERENCE";
 type UploadBuckets = Record<UploadBucketKey, File[]>;
 
+function QueuedImagePreview(props: {
+  file: File;
+  index: number;
+  onRemove: (index: number) => void;
+}) {
+  const [previewUrl, setPreviewUrl] = useState<string>("");
+
+  useEffect(() => {
+    const nextUrl = URL.createObjectURL(props.file);
+    setPreviewUrl(nextUrl);
+    return () => URL.revokeObjectURL(nextUrl);
+  }, [props.file]);
+
+  return (
+    <div className="overflow-hidden rounded-2xl border border-border bg-white">
+      <div className="aspect-square bg-slate-100">
+        {previewUrl ? <img src={previewUrl} alt={props.file.name} className="h-full w-full object-cover" /> : null}
+      </div>
+      <div className="space-y-2 p-3">
+        <p className="truncate text-xs text-muted-foreground">{props.file.name}</p>
+        <button
+          type="button"
+          onClick={() => props.onRemove(props.index)}
+          className="inline-flex items-center rounded-full px-2 py-1 text-xs font-medium text-rose-500 transition-all duration-200 hover:-translate-y-0.5 hover:bg-rose-50 hover:text-rose-600 active:scale-[0.98]"
+        >
+          <Trash2 className="mr-1 h-3.5 w-3.5" />
+          删除
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function PreviewGrid(props: {
   type: UploadBucketKey;
   files: File[];
   onRemove: (index: number) => void;
 }) {
   if (props.files.length === 0) {
-    return (
-      <div className="rounded-2xl bg-muted/70 p-4 text-xs text-muted-foreground">
-        暂未选择文件
-      </div>
-    );
+    return <div className="rounded-2xl bg-muted/70 p-4 text-xs text-muted-foreground">暂未选择文件</div>;
   }
 
   return (
     <div className="grid grid-cols-2 gap-3">
-      {props.files.map((file, index) => {
-        const previewUrl = URL.createObjectURL(file);
-        return (
-          <div key={`${file.name}-${index}`} className="overflow-hidden rounded-2xl border border-border bg-white">
-            <div className="aspect-square bg-slate-100">
-              <img src={previewUrl} alt={file.name} className="h-full w-full object-cover" />
-            </div>
-            <div className="space-y-2 p-3">
-              <p className="truncate text-xs text-muted-foreground">{file.name}</p>
-              <button
-                type="button"
-                onClick={() => props.onRemove(index)}
-                className="inline-flex items-center rounded-full px-2 py-1 text-xs font-medium text-rose-500 transition-all duration-200 hover:-translate-y-0.5 hover:bg-rose-50 hover:text-rose-600 active:scale-[0.98]"
-              >
-                <Trash2 className="mr-1 h-3.5 w-3.5" />
-                删除
-              </button>
-            </div>
-          </div>
-        );
-      })}
+      {props.files.map((file, index) => (
+        <QueuedImagePreview key={`${file.name}-${file.lastModified}-${index}`} file={file} index={index} onRemove={props.onRemove} />
+      ))}
     </div>
   );
 }
-
 export function ProjectCreator() {
   const router = useRouter();
   const [submitting, setSubmitting] = useState(false);

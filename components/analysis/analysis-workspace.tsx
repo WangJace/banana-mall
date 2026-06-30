@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
@@ -32,6 +32,26 @@ function textToArray(value: string) {
     .map((item) => item.trim())
     .filter(Boolean);
 }
+const additionalInformationTemplate = [
+  "尺寸信息（必填）：长 × 宽 × 高 / 直径 / 适配规格，单位 cm 或 mm；未知请写“待补充”。",
+  "重量 / 容量 / 功率：例如 500g、1.2L、1200W；不适用请写“不适用”。",
+  "包装清单：主商品、配件、说明书、赠品等。",
+  "安装 / 使用限制：适用场景、适配对象、禁用场景、是否需要插电/充电/固定。",
+  "安全 / 合规提示：食品接触、儿童使用、防水等级、耐温范围等。",
+  "不可出现的物理现象：例如线缆插入桌面、风向反吹、抽屉/开口方向错误、悬浮、阴影断裂。",
+].join("\n");
+
+function withDefaultAdditionalInformation(value: any) {
+  if (!value) return value;
+  if (typeof value.additionalInformation === "string" && value.additionalInformation.trim()) {
+    return value;
+  }
+
+  return {
+    ...value,
+    additionalInformation: additionalInformationTemplate,
+  };
+}
 
 export function AnalysisWorkspace({
   project,
@@ -41,7 +61,7 @@ export function AnalysisWorkspace({
   source,
 }: AnalysisWorkspaceProps) {
   const [projectState, setProjectState] = useState(project);
-  const [analysis, setAnalysis] = useState(project.analysis?.normalizedResult ?? null);
+  const [analysis, setAnalysis] = useState(withDefaultAdditionalInformation(project.analysis?.normalizedResult ?? null));
   const [running, setRunning] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savingProject, setSavingProject] = useState(false);
@@ -53,7 +73,7 @@ export function AnalysisWorkspace({
     const payload = await response.json();
     if (payload.success) {
       setProjectState(payload.data);
-      setAnalysis(payload.data.analysis?.normalizedResult ?? null);
+      setAnalysis(withDefaultAdditionalInformation(payload.data.analysis?.normalizedResult ?? null));
     }
   };
 
@@ -113,7 +133,7 @@ export function AnalysisWorkspace({
       if (!payload.success) {
         throw new Error(payload.error?.message ?? "商品分析失败");
       }
-      setAnalysis(payload.data.normalizedResult);
+      setAnalysis(withDefaultAdditionalInformation(payload.data.normalizedResult));
       await refreshProject();
       if (!options?.silentSuccess) {
         toast.success("AI 商品分析完成");
@@ -200,7 +220,7 @@ export function AnalysisWorkspace({
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          normalizedResult: analysis,
+          normalizedResult: withDefaultAdditionalInformation(analysis),
         }),
       });
       const payload = await response.json();
@@ -375,6 +395,28 @@ export function AnalysisWorkspace({
                   </div>
                 ))}
 
+                <div className="space-y-2 rounded-3xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-500/20 dark:bg-amber-500/10">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <Label>其他信息补充（含尺寸信息）</Label>
+                        <Badge variant="warning">建议必填</Badge>
+                      </div>
+                      <p className="text-xs leading-6 text-amber-800/80 dark:text-amber-200/80">
+                        尺寸、重量、容量、适配规格和使用限制会直接影响详情页规划与图像生成的物理准确性。
+                      </p>
+                    </div>
+                    <Button type="button" variant="outline" size="sm" onClick={() => updateField("additionalInformation", additionalInformationTemplate)}>
+                      使用预置模板
+                    </Button>
+                  </div>
+                  <Textarea
+                    rows={8}
+                    value={(analysis as any).additionalInformation ?? additionalInformationTemplate}
+                    onChange={(event) => updateField("additionalInformation", event.target.value)}
+                    placeholder={additionalInformationTemplate}
+                  />
+                </div>
                 <div className="flex flex-col gap-3 rounded-3xl border border-slate-200 bg-slate-50/80 p-4 dark:border-white/10 dark:bg-white/[0.04] sm:flex-row sm:items-center sm:justify-between">
                   <Button onClick={saveAnalysis} disabled={saving} variant="outline">
                     {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}

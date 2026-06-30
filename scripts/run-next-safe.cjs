@@ -7,10 +7,11 @@ const { ensureSafeWorkdir } = require("./safe-workdir.cjs");
 const projectRoot = path.resolve(__dirname, "..");
 const safeCwd = ensureSafeWorkdir(projectRoot);
 const nextBin = path.join(safeCwd, "node_modules", "next", "dist", "bin", "next");
+const nextDistDirName = process.env.NEXT_DIST_DIR || ".next";
 const command = process.argv[2];
 
 if (command === "dev" || command === "build") {
-  const nextCacheDir = path.join(safeCwd, ".next");
+  const nextCacheDir = path.join(safeCwd, nextDistDirName);
   if (fs.existsSync(nextCacheDir)) {
     fs.rmSync(nextCacheDir, { recursive: true, force: true });
   }

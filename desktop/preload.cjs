@@ -1,5 +1,5 @@
 const { contextBridge } = require("electron");
 
-contextBridge.exposeInMainWorld("bananaMallDesktop", {
+contextBridge.exposeInMainWorld("mxPageDesktop", {
   runtime: "desktop",
 });

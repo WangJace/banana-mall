@@ -9,92 +9,79 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { fileToBase64Payload } from "@/lib/utils/base64-upload";
 
-function buildBatchProjectName(file: File, index: number) {
-  const baseName = file.name.replace(/\.[^.]+$/, "").trim() || `批量商品-${index + 1}`;
-  const now = new Date();
-  const stamp = [
-    now.getFullYear(),
-    String(now.getMonth() + 1).padStart(2, "0"),
-    String(now.getDate()).padStart(2, "0"),
-    String(now.getHours()).padStart(2, "0"),
-    String(now.getMinutes()).padStart(2, "0"),
-  ].join("");
-
-  return `${baseName}-${stamp}`;
-}
-
 type BatchStatus = {
   fileName: string;
   state: "pending" | "running" | "done" | "failed";
   message: string;
-  projectId?: string;
+  projectId?: string | null;
 };
+
+type TaskPayload = {
+  id: string;
+  status: "PENDING" | "RUNNING" | "SUCCESS" | "FAILED" | "CANCELED";
+  outputPayload?: {
+    totalItems?: number;
+    completedItems?: number;
+    failedItems?: number;
+    currentStep?: string;
+    items?: BatchStatus[];
+    projectIds?: string[];
+  } | null;
+  errorMessage?: string | null;
+};
+
+type ApiPayload<T = unknown> = {
+  success: boolean;
+  data?: T;
+  error?: { message?: string };
+};
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function readPayload<T>(response: Response): Promise<ApiPayload<T>> {
+  try {
+    return (await response.json()) as ApiPayload<T>;
+  } catch {
+    return {
+      success: false,
+      error: { message: response.ok ? "响应解析失败" : `请求失败：${response.status}` },
+    };
+  }
+}
 
 export function BatchCreateWorkspace() {
   const router = useRouter();
   const [batchFiles, setBatchFiles] = useState<File[]>([]);
   const [batchSubmitting, setBatchSubmitting] = useState(false);
   const [batchStatuses, setBatchStatuses] = useState<BatchStatus[]>([]);
+  const [autoGenerateImages, setAutoGenerateImages] = useState(true);
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
 
-  function updateBatchStatus(index: number, patch: Partial<BatchStatus>) {
-    setBatchStatuses((current) =>
-      current.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)),
-    );
-  }
+  async function pollTask(taskId: string) {
+    for (;;) {
+      const response = await fetch(`/api/tasks/${taskId}`, { cache: "no-store" });
+      const payload = await readPayload<TaskPayload>(response);
+      if (!payload.success || !payload.data) {
+        throw new Error(payload.error?.message ?? "读取批量任务失败");
+      }
 
-  async function createAnalyzedPlannedProject(fileItem: File, index: number) {
-    const createResponse = await fetch("/api/projects", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: buildBatchProjectName(fileItem, index),
-        platform: "general_ecommerce",
-        style: "generic_clean",
-        description: "由批量创建自动生成",
-      }),
-    });
-    const createdPayload = await createResponse.json();
-    if (!createdPayload.success) {
-      throw new Error(createdPayload.error?.message ?? "创建项目失败");
+      const task = payload.data;
+      const output = task.outputPayload ?? {};
+      if (Array.isArray(output.items)) {
+        setBatchStatuses(output.items);
+      }
+
+      if (task.status === "SUCCESS") {
+        return task;
+      }
+      if (task.status === "FAILED" || task.status === "CANCELED") {
+        throw new Error(task.errorMessage ?? (task.status === "CANCELED" ? "批量创建已取消" : "批量创建失败"));
+      }
+
+      await sleep(1800);
     }
-
-    const projectId = createdPayload.data.id as string;
-    const base64Payload = await fileToBase64Payload(fileItem);
-
-    const uploadResponse = await fetch(`/api/projects/${projectId}/assets/upload`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        type: "MAIN",
-        ...base64Payload,
-      }),
-    });
-    const uploadPayload = await uploadResponse.json();
-    if (!uploadPayload.success) {
-      throw new Error(uploadPayload.error?.message ?? "主商品图上传失败");
-    }
-
-    const analyzeResponse = await fetch(`/api/projects/${projectId}/analyze`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "{}",
-    });
-    const analyzePayload = await analyzeResponse.json();
-    if (!analyzePayload.success) {
-      throw new Error(analyzePayload.error?.message ?? "商品分析失败");
-    }
-
-    const planResponse = await fetch(`/api/projects/${projectId}/plan-sections`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ autoDecideCounts: true }),
-    });
-    const planPayload = await planResponse.json();
-    if (!planPayload.success) {
-      throw new Error(planPayload.error?.message ?? "详情页规划失败");
-    }
-
-    return projectId;
   }
 
   async function handleBatchStart() {
@@ -104,44 +91,56 @@ export function BatchCreateWorkspace() {
     }
 
     setBatchSubmitting(true);
+    setActiveTaskId(null);
     setBatchStatuses(
       batchFiles.map((item) => ({
         fileName: item.name,
         state: "pending",
-        message: "等待处理",
+        message: "正在准备上传",
       })),
     );
 
-    let successCount = 0;
     try {
-      for (let index = 0; index < batchFiles.length; index += 1) {
-        const fileItem = batchFiles[index];
-        updateBatchStatus(index, { state: "running", message: "正在创建、分析并规划详情页" });
-        try {
-          const projectId = await createAnalyzedPlannedProject(fileItem, index);
-          successCount += 1;
-          updateBatchStatus(index, {
-            state: "done",
-            message: "已完成分析与详情页规划",
-            projectId,
-          });
-        } catch (error) {
-          updateBatchStatus(index, {
-            state: "failed",
-            message: error instanceof Error ? error.message : "处理失败",
-          });
-        }
+      const files = await Promise.all(batchFiles.map((file) => fileToBase64Payload(file)));
+      const response = await fetch("/api/tasks/batch-create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          files,
+          autoGenerateImages,
+        }),
+      });
+      const payload = await readPayload<TaskPayload>(response);
+      if (!payload.success || !payload.data?.id) {
+        throw new Error(payload.error?.message ?? "批量创建任务启动失败");
       }
 
+      setActiveTaskId(payload.data.id);
+      if (Array.isArray(payload.data.outputPayload?.items)) {
+        setBatchStatuses(payload.data.outputPayload.items);
+      }
+
+      const finished = await pollTask(payload.data.id);
+      const output = finished.outputPayload ?? {};
+      const successCount = Number(output.completedItems ?? 0);
+      const totalItems = Number(output.totalItems ?? batchFiles.length);
       if (successCount > 0) {
-        toast.success(`批量创建完成：${successCount}/${batchFiles.length} 个项目已生成详情页规划。`);
+        toast.success(`批量创建完成：${successCount}/${totalItems} 个项目处理成功。`);
         router.push("/history");
       } else {
         toast.error("批量创建未完成，请检查失败原因后重试。");
       }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "批量创建失败");
     } finally {
       setBatchSubmitting(false);
     }
+  }
+
+  async function handleCancelTask() {
+    if (!activeTaskId) return;
+    await fetch(`/api/tasks/${activeTaskId}/cancel`, { method: "POST" });
+    toast.message("已请求取消批量任务，当前正在执行的单步可能会先完成。 ");
   }
 
   const visibleStatuses =
@@ -194,15 +193,35 @@ export function BatchCreateWorkspace() {
               ) : null}
             </label>
 
-            <Button
-              type="button"
-              onClick={handleBatchStart}
-              disabled={batchSubmitting || batchFiles.length === 0}
-              className="w-full rounded-full"
-            >
-              {batchSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Images className="mr-2 h-4 w-4" />}
-              {batchSubmitting ? "正在批量创建..." : "批量创建详情页"}
-            </Button>
+            <label className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-white/70 p-4 text-sm text-slate-600 dark:border-white/10 dark:bg-black/20 dark:text-slate-300">
+              <input
+                type="checkbox"
+                checked={autoGenerateImages}
+                onChange={(event) => setAutoGenerateImages(event.target.checked)}
+                className="mt-1"
+              />
+              <span>
+                <span className="block font-medium text-slate-800 dark:text-slate-100">规划后自动生成全部模块图</span>
+                <span className="mt-1 block text-xs leading-5 text-slate-400 dark:text-slate-500">会逐个调用图像模型，耗时和费用会随产品数量与模块数量增加；后台按低并发串行处理。</span>
+              </span>
+            </label>
+
+            <div className="flex flex-wrap gap-3">
+              <Button
+                type="button"
+                onClick={handleBatchStart}
+                disabled={batchSubmitting || batchFiles.length === 0}
+                className="min-w-[180px] flex-1 rounded-full"
+              >
+                {batchSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Images className="mr-2 h-4 w-4" />}
+                {batchSubmitting ? "正在批量创建..." : "批量创建详情页"}
+              </Button>
+              {activeTaskId && batchSubmitting ? (
+                <Button type="button" variant="outline" onClick={handleCancelTask} className="rounded-full">
+                  请求取消
+                </Button>
+              ) : null}
+            </div>
           </div>
         </div>
 
@@ -211,7 +230,7 @@ export function BatchCreateWorkspace() {
             <div>
               <h2 className="text-xl font-semibold text-slate-950 dark:text-white">处理进度</h2>
               <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
-                完成后会自动进入历史记录，你可以继续打开项目生成图片。
+                后台任务会持续更新状态；已完成项目可在历史记录中打开。
               </p>
             </div>
           </div>

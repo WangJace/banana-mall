@@ -31,9 +31,27 @@ function resolveDatabasePath() {
   });
 }
 
+const migrationsTableName = "_mxpage_migrations";
+const legacyMigrationsTableName = [String.fromCharCode(95, 98, 97, 110, 97, 110, 97), "mall", "migrations"].join("_");
+
+function quoteIdentifier(value) {
+  return `"${String(value).replaceAll(`"`, `""`)}"`;
+}
+
+function tableExists(db, tableName) {
+  return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = ? AND name = ?").get("table", tableName));
+}
+
 function ensureMigrationsTable(db) {
+  const hasCurrentTable = tableExists(db, migrationsTableName);
+  const hasLegacyTable = tableExists(db, legacyMigrationsTableName);
+
+  if (!hasCurrentTable && hasLegacyTable) {
+    db.exec(`ALTER TABLE ${quoteIdentifier(legacyMigrationsTableName)} RENAME TO ${quoteIdentifier(migrationsTableName)}`);
+  }
+
   db.exec(`
-    CREATE TABLE IF NOT EXISTS "_banana_mall_migrations" (
+    CREATE TABLE IF NOT EXISTS "_mxpage_migrations" (
       "id" INTEGER PRIMARY KEY AUTOINCREMENT,
       "name" TEXT NOT NULL UNIQUE,
       "appliedAt" TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -42,7 +60,7 @@ function ensureMigrationsTable(db) {
 }
 
 function getAppliedMigrations(db) {
-  const rows = db.prepare(`SELECT "name" FROM "_banana_mall_migrations"`).all();
+  const rows = db.prepare(`SELECT "name" FROM "_mxpage_migrations"`).all();
   return new Set(rows.map((row) => row.name));
 }
 
@@ -83,7 +101,7 @@ function main() {
     db.exec("BEGIN");
     try {
       db.exec(sql);
-      db.prepare(`INSERT INTO "_banana_mall_migrations" ("name") VALUES (?)`).run(migration.name);
+      db.prepare(`INSERT INTO "_mxpage_migrations" ("name") VALUES (?)`).run(migration.name);
       db.exec("COMMIT");
       console.log(`Applied migration: ${migration.name}`);
     } catch (error) {

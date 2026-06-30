@@ -7,7 +7,8 @@ import { cn } from "@/lib/utils";
 
 type ThemeMode = "light" | "dark";
 
-const STORAGE_KEY = "banana-mall-theme";
+const STORAGE_KEY = "mxpage-theme";
+const LEGACY_STORAGE_KEY = "banana-mall-theme";
 
 function applyTheme(theme: ThemeMode) {
   const root = document.documentElement;
@@ -20,7 +21,7 @@ function resolveTheme(): ThemeMode {
     return "light";
   }
 
-  const stored = window.localStorage.getItem(STORAGE_KEY);
+  const stored = window.localStorage.getItem(STORAGE_KEY) ?? window.localStorage.getItem(LEGACY_STORAGE_KEY);
   if (stored === "light" || stored === "dark") {
     return stored;
   }

@@ -295,7 +295,7 @@ export default async function ApiUsageMonitorPage({
         <CardHeader>
           <CardTitle>最近请求明细</CardTitle>
           <CardDescription>
-            同一次逻辑调用的内部重试会被折叠展示，只保留最终结果作为主记录。当前第 {summary.page} / {summary.totalPages} 页，共 {summary.totalRequests} 条记录。
+            同一次逻辑调用的内部重试会折叠展示，只保留最终结果作为主记录。当前第 {summary.page} / {summary.totalPages} 页，共 {summary.totalRequests} 条记录。
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -321,29 +321,29 @@ export default async function ApiUsageMonitorPage({
                   <DeleteUsageEntryButton entryId={entry.id} />
                 </div>
 
-                <div className="mt-3 grid gap-2 text-sm md:grid-cols-2 xl:grid-cols-5">
-                  <div>
+                <div className="mt-3 grid gap-3 text-sm md:grid-cols-2 xl:grid-cols-[1fr_1.45fr_1fr_0.85fr_1fr]">
+                  <div className="min-w-0">
                     <p className="text-muted-foreground">项目</p>
-                    <p className="font-medium">{entry.projectId ? projectLabel(entry.projectId, projectNames) : "未归属"}</p>
+                    <p className="break-words font-medium">{entry.projectId ? projectLabel(entry.projectId, projectNames) : "未归属"}</p>
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <p className="text-muted-foreground">操作</p>
-                    <p className="font-medium">{entry.operation ?? "未标记"}</p>
+                    <p className="break-all font-mono text-[13px] font-semibold leading-5">{entry.operation ?? "未标记"}</p>
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <p className="text-muted-foreground">模型</p>
-                    <p className="font-medium">{entry.model ?? "未知模型"}</p>
+                    <p className="break-all font-mono text-[13px] font-semibold leading-5">{entry.model ?? "未知模型"}</p>
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <p className="text-muted-foreground">耗时</p>
-                    <p className="font-medium flex items-center gap-1">
+                    <p className="flex items-center gap-1 font-medium">
                       <Clock3 className="h-3.5 w-3.5" />
                       {entry.durationMs} ms
                     </p>
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <p className="text-muted-foreground">用量</p>
-                    <p className="font-medium">
+                    <p className="break-words font-medium">
                       {entry.totalTokens !== null ? `${entry.totalTokens} tokens` : "无 tokens"}
                       {entry.actualCostUsd !== null ? ` / $${entry.actualCostUsd.toFixed(6)}` : ""}
                     </p>
@@ -364,12 +364,6 @@ export default async function ApiUsageMonitorPage({
                       </span>
                     </p>
                   ) : null}
-                  <div className="hidden">
-                  <p className="break-all">最终命中端点：{entry.finalEndpoint ?? entry.endpoint}</p>
-                  {entry.retrySummary ? (
-                    <p>{entry.success ? "内部重试摘要：" : "中间失败摘要："}{displayMonitorError(entry.retrySummary, entry.statusCode)}</p>
-                  ) : null}
-                  </div>
                 </div>
 
                 {entry.collapsedAttempts.length > 1 ? (

@@ -4,18 +4,20 @@ import { Toaster } from "sonner";
 import "./globals.css";
 
 import { AppShell } from "@/components/layout/app-shell";
+import { ProviderCredentialFetchBridge } from "@/components/layout/provider-credential-fetch-bridge";
 import { ThemeScript } from "@/components/layout/theme-script";
 import { BackToTopButton } from "@/components/shared/back-to-top-button";
+import { BrandConsole } from "@/components/shared/brand-console";
 import { ChunkReloadGuard } from "@/components/shared/chunk-reload-guard";
 
 export const metadata: Metadata = {
-  title: "banana-mall",
+  title: "MxPage",
   icons: {
     icon: "/favicon.ico",
     shortcut: "/favicon.ico",
     apple: "/brand-icon.ico",
   },
-  description: "AI 电商详情页生成与编辑工作台",
+  description: "MxPage AI product page and social content generation workspace.",
 };
 
 export default function RootLayout({
@@ -28,6 +30,8 @@ export default function RootLayout({
       <body suppressHydrationWarning>
         <ThemeScript />
         <ChunkReloadGuard />
+        <BrandConsole />
+        <ProviderCredentialFetchBridge />
         <AppShell>{children}</AppShell>
         <BackToTopButton />
         <Toaster richColors position="top-right" />

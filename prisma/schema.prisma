@@ -52,6 +52,10 @@ enum TaskType {
   GENERATE
   REGENERATE
   EXPORT
+  BATCH_CREATE
+  TRANSLATE_PAGE
+  XHS_GENERATE
+  QA_CHECK
 }
 
 enum TaskStatus {
@@ -59,6 +63,7 @@ enum TaskStatus {
   RUNNING
   SUCCESS
   FAILED
+  CANCELED
 }
 
 model Project {

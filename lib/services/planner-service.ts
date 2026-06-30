@@ -2,12 +2,14 @@ import { Prisma } from "@prisma/client";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 
-import { buildSectionPlanningPrompt } from "@/lib/ai/prompts";
-import { sectionPlanOutputSchema } from "@/lib/ai/schemas/section-plan";
+import { buildSectionPlanningPrompt, buildVisualStyleGuidePrompt } from "@/lib/ai/prompts";
+import { sectionPlanOutputSchema, visualStyleGuideSchema } from "@/lib/ai/schemas/section-plan";
 import { prisma } from "@/lib/db/prisma";
+import { readStorageFile } from "@/lib/storage/asset-manager";
 import { getProviderAdapter } from "@/lib/services/provider-service";
 import { completeTask, createTask, failTask, findRecentRunningTask } from "@/lib/services/task-service";
-import { normalizeContentLanguage, type ContentLanguage } from "@/lib/utils/content-language";
+import { contentLanguageOptions, normalizeContentLanguage, type ContentLanguage } from "@/lib/utils/content-language";
+import { buildDefaultVisualStyleGuide, hasVisualStyleGuide, normalizeVisualStyleGuide, readVisualStyleGuide } from "@/lib/utils/visual-style-guide";
 import type { SectionTypeKey } from "@/types/domain";
 
 type PreviewConfigInput = {
@@ -42,7 +44,7 @@ const previewConfigSchema = z.object({
   heroImageCount: z.number().int().min(3).max(5),
   detailSectionCount: z.number().int().min(4).max(10),
   imageAspectRatio: z.enum(["3:4", "9:16"]).default("9:16"),
-  contentLanguage: z.enum(["zh-CN", "en-US", "ja-JP", "ko-KR"]).default("zh-CN"),
+  contentLanguage: z.enum(contentLanguageOptions).default("zh-CN"),
 });
 
 const previewDecisionSchema = z.object({
@@ -276,12 +278,53 @@ function ensureBilingualPrompt(prompt: string, sectionTitle: string) {
   return `Primary Prompt: ${primaryPrompt}\nEnglish Prompt: A premium e-commerce section visual for ${sectionTitle}, with the marketing copy designed directly inside the image and a strong conversion-focused composition.`;
 }
 
-function normalizeEditableFields(value: unknown) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
+function normalizeEditableFields(value: unknown): Record<string, unknown> {
+  const raw = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 
-  return value as Record<string, unknown>;
+  return {
+    ...raw,
+    styleRole: typeof raw.styleRole === "string" ? raw.styleRole : "Follow the project-level visual style guide while serving this section goal.",
+    sharedStyleAnchors: Array.isArray(raw.sharedStyleAnchors)
+      ? raw.sharedStyleAnchors
+      : ["consistent color palette", "consistent background system", "consistent lighting direction", "consistent typography and CTA style", "accurate product proportions and materials"],
+    localVariation: typeof raw.localVariation === "string" ? raw.localVariation : "Only vary the section-specific selling point, composition angle, and information hierarchy.",
+  };
+}
+
+type PlanningAsset = {
+  filePath: string;
+  mimeType?: string | null;
+  type: string;
+  isMain: boolean;
+  sortOrder: number;
+};
+
+function pickPlanningReferenceAssets(assets: PlanningAsset[]) {
+  const ranked = [...assets]
+    .filter((asset) => ["MAIN", "ANGLE", "DETAIL", "REFERENCE"].includes(asset.type))
+    .sort((a, b) => {
+      const score = (asset: PlanningAsset) => {
+        if (asset.isMain) return 0;
+        if (asset.type === "MAIN") return 1;
+        if (asset.type === "ANGLE") return 2;
+        if (asset.type === "DETAIL") return 3;
+        return 4;
+      };
+      return score(a) - score(b) || a.sortOrder - b.sortOrder;
+    });
+
+  return ranked.slice(0, 3);
+}
+
+async function assetToPlanningDataUrl(asset: Pick<PlanningAsset, "filePath" | "mimeType">) {
+  const buffer = await readStorageFile(asset.filePath);
+  const mimeType = asset.mimeType ?? "image/png";
+  return `data:${mimeType};base64,${buffer.toString("base64")}`;
+}
+
+async function collectPlanningReferenceImages(assets: PlanningAsset[]) {
+  const selectedAssets = pickPlanningReferenceAssets(assets);
+  return Promise.all(selectedAssets.map((asset) => assetToPlanningDataUrl(asset)));
 }
 
 function readPreviewConfig(snapshot: unknown): PreviewConfigInput {
@@ -292,6 +335,55 @@ function readPreviewConfig(snapshot: unknown): PreviewConfigInput {
     imageAspectRatio: ((raw as Record<string, unknown> | null)?.imageAspectRatio ?? "9:16") as "3:4" | "9:16",
     contentLanguage: normalizeContentLanguage((raw as Record<string, unknown> | null)?.contentLanguage),
   });
+}
+
+function buildProjectVisualStyleGuideFallback(project: { style: string; platform: string; analysis?: { normalizedResult: unknown } | null }) {
+  const analysis = (project.analysis?.normalizedResult as Record<string, unknown> | null) ?? {};
+  return buildDefaultVisualStyleGuide({
+    productName: typeof analysis.productName === "string" ? analysis.productName : undefined,
+    styleLabel: project.style,
+    platformLabel: project.platform,
+  });
+}
+
+function resolvePlanningVisualStyleGuide(project: { modelSnapshot: unknown; style: string; platform: string; analysis?: { normalizedResult: unknown } | null }, plannedGuide?: unknown) {
+  const fallback = buildProjectVisualStyleGuideFallback(project);
+  const existingGuide = readVisualStyleGuide(project.modelSnapshot, fallback);
+  if (existingGuide) return existingGuide;
+  if (hasVisualStyleGuide(plannedGuide)) return normalizeVisualStyleGuide(plannedGuide, fallback);
+  return fallback;
+}
+
+type PlanningModelRecord = {
+  modelId: string;
+  capabilities: unknown;
+  isDefaultPlanning?: boolean;
+  isDefaultAnalysis?: boolean;
+};
+
+function readModelCapabilities(model: PlanningModelRecord) {
+  return (model.capabilities as Record<string, boolean> | null) ?? {};
+}
+
+function isVisionTextModel(model: PlanningModelRecord) {
+  const capabilities = readModelCapabilities(model);
+  return Boolean(capabilities.text && capabilities.vision);
+}
+
+function pickMultimodalPlanningModel(models: PlanningModelRecord[], preferredModelId?: string | null) {
+  if (preferredModelId) return preferredModelId;
+
+  const visionTextModels = models.filter(isVisionTextModel);
+  return (
+    visionTextModels.find((item) => item.isDefaultPlanning)?.modelId ??
+    visionTextModels.find((item) => item.isDefaultAnalysis)?.modelId ??
+    visionTextModels.find((item) => /gpt-4o|gpt-4\.1|gpt-5|gemini|qwen.*vl|kimi|moonshot/i.test(item.modelId))?.modelId ??
+    visionTextModels[0]?.modelId ??
+    models.find((item) => item.isDefaultPlanning)?.modelId ??
+    models.find((item) => item.isDefaultAnalysis)?.modelId ??
+    models.find((item) => (item.capabilities as Record<string, boolean>).structured_output)?.modelId ??
+    null
+  );
 }
 
 function readPreviewMeta(snapshot: unknown) {
@@ -559,13 +651,18 @@ function shouldFallbackToTemplatePlan(error: unknown) {
     return false;
   }
 
-  return /"sections"|expected array|invalid input: expected array|received undefined|section/i.test(error.message);
+  const message = error.message;
+  return /"sections"|expected array|invalid input: expected array|received undefined|section/i.test(message) ||
+    /timed out|timeout|aborted|network|fetch failed|ECONNRESET|ETIMEDOUT|provider request timed out/i.test(message) ||
+    message.includes("\u8d85\u65f6") ||
+    message.includes("\u7f51\u7edc") ||
+    message.includes("Provider \u8bf7\u6c42");
 }
 
 async function decidePreviewConfigWithAi(projectId: string, preferredModelId?: string | null) {
   const project = await prisma.project.findUnique({
     where: { id: projectId },
-    include: { analysis: true },
+    include: { analysis: true, assets: true },
   });
 
   if (!project?.analysis) {
@@ -573,16 +670,14 @@ async function decidePreviewConfigWithAi(projectId: string, preferredModelId?: s
   }
 
   const { provider, adapter } = await getProviderAdapter();
-  const model =
-    preferredModelId ??
-    provider.models.find((item) => item.isDefaultPlanning)?.modelId ??
-    provider.models.find((item) => (item.capabilities as Record<string, boolean>).structured_output)?.modelId;
+  const model = pickMultimodalPlanningModel(provider.models, preferredModelId);
 
   if (!model) {
     throw new Error("当前没有可用的文案规划模型。");
   }
 
   const currentPreviewConfig = readPreviewConfig(project.modelSnapshot);
+  const planningReferenceImages = await collectPlanningReferenceImages(project.assets as PlanningAsset[]);
   const prompt = buildPreviewDecisionPrompt(
     project.analysis.normalizedResult as Record<string, unknown>,
     currentPreviewConfig.contentLanguage,
@@ -592,7 +687,8 @@ async function decidePreviewConfigWithAi(projectId: string, preferredModelId?: s
     systemPrompt: "Return strict JSON only.",
     userPrompt: prompt,
     schema: previewDecisionSchema,
-    timeoutMs: 60000,
+    images: planningReferenceImages,
+    timeoutMs: 90000,
     monitor: {
       projectId,
       operation: "preview_count_planning",
@@ -635,7 +731,7 @@ export async function planSections(
 ) {
   const project = await prisma.project.findUnique({
     where: { id: projectId },
-    include: { analysis: true },
+    include: { analysis: true, assets: true },
   });
 
   if (!project?.analysis) {
@@ -643,10 +739,7 @@ export async function planSections(
   }
 
   const { provider, adapter } = await getProviderAdapter();
-  const model =
-    options?.modelId ??
-    provider.models.find((item) => item.isDefaultPlanning)?.modelId ??
-    provider.models.find((item) => (item.capabilities as Record<string, boolean>).structured_output)?.modelId;
+  const model = pickMultimodalPlanningModel(provider.models, options?.modelId);
 
   if (!model) {
     throw new Error("当前没有可用的文案规划模型。");
@@ -671,6 +764,8 @@ export async function planSections(
     previewDecisionReason = decision.reason;
   }
 
+  const planningReferenceImages = await collectPlanningReferenceImages(project.assets as PlanningAsset[]);
+
   const task = await createTask({
     projectId,
     taskType: "PLAN",
@@ -692,7 +787,8 @@ export async function planSections(
       systemPrompt: "Return strict JSON only. sections must be complete.",
       userPrompt: prompt,
       schema: sectionPlanOutputSchema,
-      timeoutMs: 90000,
+      images: planningReferenceImages,
+      timeoutMs: 180000,
       monitor: {
         projectId,
         operation: "section_planning",
@@ -710,6 +806,7 @@ export async function planSections(
             previewConfig.detailSectionCount,
           )
         : buildFallbackPlanFromTemplates(previewConfig.heroImageCount, previewConfig.detailSectionCount);
+    const visualStyleGuide = resolvePlanningVisualStyleGuide(project, result.parsed.visualStyleGuide);
 
     await prisma.pageSection.createMany({
       data: sections.map((section) => ({
@@ -735,6 +832,7 @@ export async function planSections(
           previewConfig,
           previewConfigSource: options?.autoDecideCounts ? "ai" : "manual",
           previewConfigReason: previewDecisionReason,
+          visualStyleGuide,
         } as Prisma.InputJsonValue,
       },
     });
@@ -743,11 +841,12 @@ export async function planSections(
       where: { projectId },
       orderBy: { order: "asc" },
     });
-    await completeTask(task.id, { sections: saved, previewConfig, previewDecisionReason });
+    await completeTask(task.id, { sections: saved, previewConfig, previewDecisionReason, visualStyleGuide });
     return {
       sections: saved,
       previewConfig,
       previewDecisionReason,
+      visualStyleGuide,
     };
   } catch (error) {
     if (shouldFallbackToTemplatePlan(error)) {
@@ -771,6 +870,8 @@ export async function planSections(
           })),
         });
 
+        const fallbackVisualStyleGuide = resolvePlanningVisualStyleGuide(project);
+
         await prisma.project.update({
           where: { id: projectId },
           data: {
@@ -781,6 +882,7 @@ export async function planSections(
               previewConfig,
               previewConfigSource: options?.autoDecideCounts ? "ai" : "manual",
               previewConfigReason: `${previewDecisionReason ? `${previewDecisionReason}；` : ""}AI 返回结构不完整，已自动切换为模板规划。`,
+              visualStyleGuide: fallbackVisualStyleGuide,
             } as Prisma.InputJsonValue,
           },
         });
@@ -795,6 +897,7 @@ export async function planSections(
           previewConfig,
           previewDecisionReason,
           fallbackMode: "template_plan",
+          visualStyleGuide: fallbackVisualStyleGuide,
         });
 
         return {
@@ -802,6 +905,7 @@ export async function planSections(
           previewConfig,
           previewDecisionReason,
           fallbackMode: "template_plan" as const,
+          visualStyleGuide: fallbackVisualStyleGuide,
         };
       } catch {
         await failTask(task.id, "AI 规划结果格式不完整，且模板规划回退失败。");
@@ -818,6 +922,68 @@ export async function planSections(
     await failTask(task.id, message);
     throw new Error(message);
   }
+}
+
+export async function regenerateVisualStyleGuide(projectId: string, preferredModelId?: string | null) {
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    include: { analysis: true, assets: true },
+  });
+
+  if (!project?.analysis) {
+    throw new Error("Please finish product analysis before generating the visual style guide.");
+  }
+
+  const { provider, adapter } = await getProviderAdapter();
+  const model = pickMultimodalPlanningModel(provider.models, preferredModelId);
+
+  if (!model) {
+    throw new Error("No available planning model is configured.");
+  }
+
+  const previewConfig = readPreviewConfig(project.modelSnapshot);
+  const planningReferenceImages = await collectPlanningReferenceImages(project.assets as PlanningAsset[]);
+  const prompt = buildVisualStyleGuidePrompt(
+    project.analysis.normalizedResult as never,
+    project.style,
+    project.platform,
+    previewConfig.contentLanguage,
+  );
+
+  const result = await adapter.generateStructured({
+    model,
+    systemPrompt: "Return strict JSON only.",
+    userPrompt: prompt,
+    schema: visualStyleGuideSchema,
+    images: planningReferenceImages,
+    timeoutMs: 120000,
+    monitor: {
+      projectId,
+      operation: "visual_style_guide_regenerate",
+    },
+  });
+
+  const visualStyleGuide = normalizeVisualStyleGuide(
+    result.parsed,
+    buildProjectVisualStyleGuideFallback(project),
+  );
+
+  const updated = await prisma.project.update({
+    where: { id: projectId },
+    data: {
+      modelSnapshot: {
+        ...((project.modelSnapshot as Record<string, unknown> | null) ?? {}),
+        visualStyleGuide,
+        visualStyleGuideModelId: model,
+        visualStyleGuideUpdatedAt: new Date().toISOString(),
+      } as Prisma.InputJsonValue,
+    },
+  });
+
+  return {
+    visualStyleGuide,
+    project: updated,
+  };
 }
 
 export async function createSection(
@@ -923,3 +1089,4 @@ export async function reorderSections(projectId: string, orderedSectionIds: stri
     orderBy: { order: "asc" },
   });
 }
+

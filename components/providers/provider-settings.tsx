@@ -1,20 +1,15 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { useForm } from "react-hook-form";
 import { toast } from "sonner";
-import { ChevronsUpDown, CopyPlus, History, Loader2, PlugZap, Save, Search } from "lucide-react";
-import { z } from "zod";
+import { ChevronsUpDown, CopyPlus, History, Loader2, LockKeyhole, PlugZap } from "lucide-react";
 
+import { CLIENT_PROVIDER_STORAGE_KEY } from "@/components/layout/provider-credential-fetch-bridge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { providerSaveSchema } from "@/lib/validations/provider";
-
-type ProviderFormValues = z.input<typeof providerSaveSchema>;
 
 type ProviderModelRecord = {
   modelId: string;
@@ -41,15 +36,21 @@ type ProviderRecord = {
   id: string;
   name: string;
   baseUrl: string;
-  apiKey: string;
-  maskedApiKey: string;
+  apiKey?: string;
+  maskedApiKey?: string;
   isActive: boolean;
   updatedAt: string | Date;
   models: ProviderModelRecord[];
 };
 
+type RuntimeConfig = {
+  baseUrlLocked: boolean;
+  lockedBaseUrl: string | null;
+};
+
 interface ProviderSettingsProps {
   initialProviders: ProviderRecord[];
+  runtimeConfig?: RuntimeConfig;
 }
 
 type DefaultAssignments = {
@@ -60,14 +61,8 @@ type DefaultAssignments = {
   imageEditModelId: string;
 };
 
-type GenericModelRecord = Record<string, any>;
 type ModelTypeKey = "text" | "vision" | "image_gen" | "image_edit";
-type ModelOptionGroup = {
-  key: string;
-  label: string;
-  description: string;
-  models: GenericModelRecord[];
-};
+type GenericModelRecord = ProviderModelRecord | Record<string, any>;
 
 const modelTypeFields: Array<{ key: ModelTypeKey; label: string }> = [
   { key: "text", label: "文本生成模型" },
@@ -76,59 +71,22 @@ const modelTypeFields: Array<{ key: ModelTypeKey; label: string }> = [
   { key: "image_edit", label: "图像编辑模型" },
 ];
 
-function buildDefaults(provider: ProviderRecord | null): DefaultAssignments {
-  return {
-    analysisModelId: provider?.models.find((item) => item.isDefaultAnalysis)?.modelId ?? "",
-    planningModelId: provider?.models.find((item) => item.isDefaultPlanning)?.modelId ?? "",
-    heroImageModelId: provider?.models.find((item) => item.isDefaultHeroImage)?.modelId ?? "",
-    detailImageModelId: provider?.models.find((item) => item.isDefaultDetailImage)?.modelId ?? "",
-    imageEditModelId: provider?.models.find((item) => item.isDefaultImageEdit)?.modelId ?? "",
-  };
-}
-
-function uniqueModels(models: GenericModelRecord[]) {
-  const seen = new Set<string>();
-  return models.filter((model) => {
-    const key = model.modelId ?? model.label;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-function getModelText(model: GenericModelRecord) {
-  return `${model.modelId ?? ""} ${model.label ?? ""}`.toLowerCase();
-}
-
-function normalizeModelId(modelId: string) {
-  return modelId.toLowerCase().replace(/[^a-z0-9.]+/g, "");
-}
-
-const preferredEconomyTextModelIds = [
+const preferredGptTextModelIds = [
   "gpt-5-mini",
   "gpt-5-nano",
   "gpt-4.1-mini",
   "gpt-4.1-nano",
   "gpt-4o-mini",
-  "gemini-2.5-flash",
-  "gemini-2.0-flash-001",
-  "gemini-2.0-flash",
+  "gpt-4o",
+  "gpt-4.1",
 ];
 
-function getEconomyTextPreferenceRank(model: GenericModelRecord) {
-  const normalized = normalizeModelId(String(model.modelId ?? model.label ?? ""));
-  const index = preferredEconomyTextModelIds.map(normalizeModelId).indexOf(normalized);
-  return index === -1 ? null : index;
+function normalizeModelId(modelId: string) {
+  return modelId.toLowerCase().replace(/[^a-z0-9.]+/g, "");
 }
 
-function isPreferredEconomyTextModel(model: GenericModelRecord) {
-  return getEconomyTextPreferenceRank(model) !== null;
-}
-
-function isPreferredGptImage2(model: GenericModelRecord) {
-  const modelId = String(model.modelId ?? model.label ?? "");
-  const normalized = normalizeModelId(modelId);
-  return normalized === "gptimage2" || /^gpt[-_\s]?image[-_\s]?2(?:[-_\s]|$)/i.test(modelId);
+function getModelText(model: GenericModelRecord) {
+  return `${model.modelId ?? ""} ${model.label ?? ""}`.toLowerCase();
 }
 
 function isUtilityModel(model: GenericModelRecord) {
@@ -139,116 +97,65 @@ function isTextGenerationModel(model: GenericModelRecord) {
   return (
     !isUtilityModel(model) &&
     (Boolean(model.capabilities?.text) ||
-      /(^|[-_])o[134](?:[-_]|$)|gpt|gemini|claude|qwen|qwq|qvq|glm|deepseek|chat|instruct|command|llama|mistral|mixtral|moonshot|kimi|yi-|ernie|hunyuan|spark|doubao|minimax|abab|grok|reka|cohere|sonar/.test(
+      /(^|[-_])o[1345](?:[-_]|$)|gpt|chat|instruct|completion|responses|reasoner|qwen|glm|deepseek|kimi|claude|llama|mistral|moonshot/.test(
         getModelText(model),
       ))
   );
 }
 
 function isVisionModel(model: GenericModelRecord) {
-  return (
-    Boolean(model.capabilities?.vision) ||
-    /(vision|vl|4o|omni|gemini|multimodal|qwen-vl|qvq|pixtral|llava|visual|claude-3|claude-sonnet|claude-opus|gpt-4\.1|gpt-5)/.test(
-      getModelText(model),
-    )
-  );
+  return Boolean(model.capabilities?.vision) || /(vision|vl|4o|omni|multimodal|gpt-4\.1|gpt-5|qwen-vl|qvq|pixtral|visual)/.test(getModelText(model));
 }
 
 function isImageGenerationModel(model: GenericModelRecord) {
-  return (
-    Boolean(model.capabilities?.image_gen) ||
-    /(image|imagen|flux|sdxl|stable-diffusion|stable.?image|banana|nano-banana|recraft|dall[-_ ]?e|gpt[-_\s]?image|chatgpt-image|seedream|jimeng|midjourney|mj-|ideogram|hidream|kolors|wanx|cogview|playground|leonardo)/.test(
-      getModelText(model),
-    )
-  );
+  return Boolean(model.capabilities?.image_gen) || /(gpt[-_\s]?image|chatgpt-image|dall[-_ ]?e|image|imagen|flux|recraft|seedream|jimeng|midjourney|ideogram|cogview)/.test(getModelText(model));
 }
 
 function isImageEditModel(model: GenericModelRecord) {
-  return (
-    Boolean(model.capabilities?.image_edit) ||
-    /(edit|inpaint|mask|kontext|retouch|erase|remove.?background|gpt[-_\s]?image|chatgpt-image)/.test(getModelText(model))
-  );
+  return Boolean(model.capabilities?.image_edit) || /(gpt[-_\s]?image|chatgpt-image|edit|inpaint|mask|retouch|erase|remove.?background)/.test(getModelText(model));
 }
 
 function isImageProductionModel(model: GenericModelRecord) {
   return isImageGenerationModel(model) || isImageEditModel(model);
 }
 
-function isStructuredOutputModel(model: GenericModelRecord) {
-  return Boolean(model.capabilities?.structured_output) || isTextGenerationModel(model);
+function uniqueModels(models: GenericModelRecord[]) {
+  const seen = new Set<string>();
+  return models.filter((model) => {
+    const key = String(model.modelId ?? model.label ?? "");
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
-function isEmbeddingOrRerankModel(model: GenericModelRecord) {
-  return /(embedding|embed|rerank|ranker)/.test(getModelText(model));
+function isPreferredGptTextModel(model: GenericModelRecord) {
+  const normalized = normalizeModelId(String(model.modelId ?? model.label ?? ""));
+  return preferredGptTextModelIds.map(normalizeModelId).includes(normalized);
 }
 
-function isAudioModel(model: GenericModelRecord) {
-  return /(whisper|tts|speech|audio|transcrib)/.test(getModelText(model));
-}
-
-function isVideoModel(model: GenericModelRecord) {
-  return /(sora|video|veo|kling|wan[-_ ]?video)/.test(getModelText(model));
-}
-
-function isModerationModel(model: GenericModelRecord) {
-  return /(moderation|guard|safety|safe)/.test(getModelText(model));
-}
-
-function isFastOrCheapModel(model: GenericModelRecord) {
-  return Boolean(model.capabilities?.fast || model.capabilities?.cheap) || /(flash|mini|nano|lite|turbo|instant)/.test(getModelText(model));
-}
-
-function isHighQualityModel(model: GenericModelRecord) {
-  return Boolean(model.capabilities?.high_quality) || /(pro|ultra|opus|quality|max|sonnet|gpt-5)/.test(getModelText(model));
-}
-
-function isPreviewOrTestModel(model: GenericModelRecord) {
-  return /(^|[-_])(?:preview|experimental|beta|test|deprecated|legacy)(?:[-_]|$)/.test(getModelText(model));
+function isPreferredGptImage2(model: GenericModelRecord) {
+  const modelId = String(model.modelId ?? model.label ?? "");
+  const normalized = normalizeModelId(modelId);
+  return normalized === "gptimage2" || /^gpt[-_\s]?image[-_\s]?2(?:[-_\s]|$)/i.test(modelId);
 }
 
 function canUseForModelType(model: GenericModelRecord, typeKey: ModelTypeKey) {
-  if (typeKey === "text") {
-    return isTextGenerationModel(model) && !isImageProductionModel(model);
-  }
-  if (typeKey === "vision") {
-    return isVisionModel(model) && !isImageProductionModel(model);
-  }
-  if (typeKey === "image_gen") {
-    return isImageGenerationModel(model);
-  }
+  if (typeKey === "text") return isTextGenerationModel(model) && !isImageProductionModel(model);
+  if (typeKey === "vision") return isVisionModel(model) && !isImageProductionModel(model);
+  if (typeKey === "image_gen") return isImageGenerationModel(model);
   return isImageEditModel(model);
 }
 
 function scoreModelForType(model: GenericModelRecord, typeKey: ModelTypeKey) {
   let score = 0;
-
-  const economyRank = getEconomyTextPreferenceRank(model);
-  if ((typeKey === "text" || typeKey === "vision") && economyRank !== null) {
-    score += 120 - economyRank;
-  }
-  if ((typeKey === "image_gen" || typeKey === "image_edit") && isPreferredGptImage2(model)) {
-    score += normalizeModelId(String(model.modelId ?? model.label ?? "")) === "gptimage2" ? 100 : 90;
-  }
-
-  if (typeKey === "text") {
-    if (isTextGenerationModel(model)) score += 10;
-    if (isStructuredOutputModel(model)) score += 5;
-  } else if (typeKey === "vision") {
-    if (isVisionModel(model)) score += 12;
-    if (isTextGenerationModel(model)) score += 4;
-  } else if (typeKey === "image_edit") {
-    if (isImageEditModel(model)) score += 35;
-  } else {
-    if (isImageGenerationModel(model)) score += 35;
-  }
-
-  if (isHighQualityModel(model)) score += 4;
-  if (isFastOrCheapModel(model)) score += 6;
-  if ((typeKey === "text" || typeKey === "vision") && /gpt[-_\s]?5\.5|gpt[-_\s]?5\.4[-_\s]?pro|pro|max/i.test(getModelText(model))) {
-    score -= 25;
-  }
-  if (isPreviewOrTestModel(model)) score -= 8;
-
+  const text = getModelText(model);
+  if ((typeKey === "text" || typeKey === "vision") && isPreferredGptTextModel(model)) score += 100;
+  if ((typeKey === "image_gen" || typeKey === "image_edit") && isPreferredGptImage2(model)) score += 100;
+  if (/gpt/i.test(text)) score += 20;
+  if (/(mini|nano|lite|turbo|flash)/i.test(text)) score += 8;
+  if (/(preview|experimental|beta|test|deprecated|legacy)/i.test(text)) score -= 10;
+  if (/gpt[-_\s]?5\.5|pro|max|ultra/i.test(text) && (typeKey === "text" || typeKey === "vision")) score -= 20;
   return score;
 }
 
@@ -260,129 +167,35 @@ function getModelsForType(models: GenericModelRecord[], typeKey: ModelTypeKey) {
   });
 }
 
+function buildDefaults(provider: ProviderRecord | null): DefaultAssignments {
+  return {
+    analysisModelId: provider?.models.find((item) => item.isDefaultAnalysis)?.modelId ?? "",
+    planningModelId: provider?.models.find((item) => item.isDefaultPlanning)?.modelId ?? "",
+    heroImageModelId: provider?.models.find((item) => item.isDefaultHeroImage)?.modelId ?? "",
+    detailImageModelId: provider?.models.find((item) => item.isDefaultDetailImage)?.modelId ?? "",
+    imageEditModelId: provider?.models.find((item) => item.isDefaultImageEdit)?.modelId ?? "",
+  };
+}
+
 function getTypeDefaultValue(defaults: DefaultAssignments, typeKey: ModelTypeKey) {
-  if (typeKey === "text") {
-    return defaults.planningModelId ?? "";
-  }
-  if (typeKey === "vision") {
-    return defaults.analysisModelId ?? "";
-  }
-  if (typeKey === "image_gen") {
-    return defaults.heroImageModelId || defaults.detailImageModelId || "";
-  }
-  return defaults.imageEditModelId ?? "";
+  if (typeKey === "text") return defaults.planningModelId;
+  if (typeKey === "vision") return defaults.analysisModelId;
+  if (typeKey === "image_gen") return defaults.heroImageModelId || defaults.detailImageModelId;
+  return defaults.imageEditModelId;
 }
 
 function setTypeDefaultValue(defaults: DefaultAssignments, typeKey: ModelTypeKey, modelId: string): DefaultAssignments {
-  if (typeKey === "text") {
-    return { ...defaults, planningModelId: modelId };
-  }
-  if (typeKey === "vision") {
-    return { ...defaults, analysisModelId: modelId };
-  }
-  if (typeKey === "image_gen") {
-    return { ...defaults, heroImageModelId: modelId, detailImageModelId: modelId };
-  }
+  if (typeKey === "text") return { ...defaults, planningModelId: modelId };
+  if (typeKey === "vision") return { ...defaults, analysisModelId: modelId };
+  if (typeKey === "image_gen") return { ...defaults, heroImageModelId: modelId, detailImageModelId: modelId };
   return { ...defaults, imageEditModelId: modelId };
-}
-
-function buildCapabilityGroups(models: GenericModelRecord[]): ModelOptionGroup[] {
-  return [
-    {
-      key: "text",
-      label: "文本生成模型",
-      description: "用于商品分析、页面规划、文案生成和结构化输出",
-      models: models.filter(isTextGenerationModel),
-    },
-    {
-      key: "vision",
-      label: "图像识别模型",
-      description: "用于理解上传商品图、参考图和多模态分析",
-      models: models.filter(isVisionModel),
-    },
-    {
-      key: "image_gen",
-      label: "图像生成模型",
-      description: "用于生成头图、详情图和电商视觉素材",
-      models: models.filter(isImageGenerationModel),
-    },
-    {
-      key: "image_edit",
-      label: "图像编辑模型",
-      description: "用于重绘、增强、局部修改和基于参考图编辑",
-      models: models.filter(isImageEditModel),
-    },
-    {
-      key: "structured",
-      label: "结构化输出模型",
-      description: "用于稳定返回 JSON、规划模块和可解析结果",
-      models: models.filter(isStructuredOutputModel),
-    },
-    {
-      key: "embedding",
-      label: "Embedding / Rerank 模型",
-      description: "用于向量检索、排序和相似度任务",
-      models: models.filter(isEmbeddingOrRerankModel),
-    },
-    {
-      key: "audio",
-      label: "音频模型",
-      description: "用于语音识别、转写或语音合成",
-      models: models.filter(isAudioModel),
-    },
-    {
-      key: "video",
-      label: "视频模型",
-      description: "用于视频生成或视频理解",
-      models: models.filter(isVideoModel),
-    },
-    {
-      key: "moderation",
-      label: "安全审核模型",
-      description: "用于内容审核、安全分类和风控",
-      models: models.filter(isModerationModel),
-    },
-    {
-      key: "fast",
-      label: "高速/低成本模型",
-      description: "适合草稿、批量预览和低成本任务",
-      models: models.filter(isFastOrCheapModel),
-    },
-    {
-      key: "high_quality",
-      label: "高质量模型",
-      description: "适合最终生成、复杂推理和高品质视觉任务",
-      models: models.filter(isHighQualityModel),
-    },
-    {
-      key: "other",
-      label: "其他模型",
-      description: "当前规则未明确归类的模型，仍可在默认角色中手动选择",
-      models: models.filter(
-        (model) =>
-          !isTextGenerationModel(model) &&
-          !isVisionModel(model) &&
-          !isImageGenerationModel(model) &&
-          !isImageEditModel(model) &&
-          !isEmbeddingOrRerankModel(model) &&
-          !isAudioModel(model) &&
-          !isVideoModel(model) &&
-          !isModerationModel(model),
-      ),
-    },
-  ]
-    .map((group) => ({ ...group, models: uniqueModels(group.models) }))
-    .filter((group) => group.models.length > 0);
 }
 
 function pickModel(models: GenericModelRecord[], predicates: Array<(model: GenericModelRecord) => boolean>) {
   for (const predicate of predicates) {
     const matched = models.find(predicate);
-    if (matched?.modelId) {
-      return matched.modelId;
-    }
+    if (matched?.modelId) return String(matched.modelId);
   }
-
   return "";
 }
 
@@ -391,26 +204,22 @@ function buildRecommendedDefaults(models: GenericModelRecord[]): DefaultAssignme
   const textModels = getModelsForType(models, "text");
   const imageGenerationModels = getModelsForType(models, "image_gen");
   const imageEditModels = getModelsForType(models, "image_edit");
-  const economyVision = pickModel(visionModels, [isPreferredEconomyTextModel]);
-  const economyText = pickModel(textModels, [isPreferredEconomyTextModel]);
-  const gptImage2Generation = pickModel(imageGenerationModels, [isPreferredGptImage2]);
-  const gptImage2Edit = pickModel(imageEditModels, [isPreferredGptImage2]);
-
+  const textDefault = pickModel(textModels, [isPreferredGptTextModel, (model) => /gpt/i.test(getModelText(model)), () => true]);
+  const visionDefault = pickModel(visionModels, [isPreferredGptTextModel, (model) => /gpt/i.test(getModelText(model)), () => true]);
+  const imageDefault = pickModel(imageGenerationModels, [isPreferredGptImage2, (model) => /gpt[-_\s]?image/i.test(getModelText(model)), () => true]);
+  const editDefault = pickModel(imageEditModels, [isPreferredGptImage2, (model) => /gpt[-_\s]?image/i.test(getModelText(model)), () => true]);
   return {
-    analysisModelId: economyVision || pickModel(visionModels, [() => true]),
-    planningModelId: economyText || pickModel(textModels, [() => true]),
-    heroImageModelId: gptImage2Generation || pickModel(imageGenerationModels, [() => true]),
-    detailImageModelId: gptImage2Generation || pickModel(imageGenerationModels, [() => true]),
-    imageEditModelId: gptImage2Edit || pickModel(imageEditModels, [() => true]),
+    analysisModelId: visionDefault || textDefault,
+    planningModelId: textDefault,
+    heroImageModelId: imageDefault,
+    detailImageModelId: imageDefault,
+    imageEditModelId: editDefault || imageDefault,
   };
 }
 
 function formatTimeLabel(value: string | Date) {
   const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "未知时间";
-  }
-
+  if (Number.isNaN(date.getTime())) return "未知时间";
   return new Intl.DateTimeFormat("zh-CN", {
     month: "2-digit",
     day: "2-digit",
@@ -419,68 +228,111 @@ function formatTimeLabel(value: string | Date) {
   }).format(date);
 }
 
-export function ProviderSettings({ initialProviders }: ProviderSettingsProps) {
-  const [providers, setProviders] = useState(initialProviders);
-  const activeProvider = useMemo(
-    () => providers.find((item) => item.isActive) ?? providers[0] ?? null,
-    [providers],
+function readStoredCredentials() {
+  if (typeof window === "undefined") return { apiKey: "", baseUrl: "" };
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(CLIENT_PROVIDER_STORAGE_KEY) || "{}") as { apiKey?: string; baseUrl?: string };
+    return {
+      apiKey: parsed.apiKey ?? "",
+      baseUrl: parsed.baseUrl ?? "",
+    };
+  } catch {
+    return { apiKey: "", baseUrl: "" };
+  }
+}
+
+function writeStoredCredentials(values: { apiKey: string; baseUrl: string }) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(
+    CLIENT_PROVIDER_STORAGE_KEY,
+    JSON.stringify({ apiKey: values.apiKey.trim(), baseUrl: values.baseUrl.trim() }),
   );
+}
+
+export function ProviderSettings({ initialProviders, runtimeConfig }: ProviderSettingsProps) {
+  const lockedBaseUrl = runtimeConfig?.lockedBaseUrl ?? "";
+  const baseUrlLocked = Boolean(runtimeConfig?.baseUrlLocked && lockedBaseUrl);
+  const [providers, setProviders] = useState(initialProviders);
+  const activeProvider = useMemo(() => providers.find((item) => item.isActive) ?? providers[0] ?? null, [providers]);
   const [selectedProviderId, setSelectedProviderId] = useState(activeProvider?.id ?? "");
-  const [loading, setLoading] = useState<null | "test" | "discover" | "save" | "saveAsNew">(null);
-  const [switchingProviderId, setSwitchingProviderId] = useState<string | null>(null);
   const selectedProvider = useMemo(
     () => providers.find((item) => item.id === selectedProviderId) ?? activeProvider,
     [providers, selectedProviderId, activeProvider],
   );
+  const [loading, setLoading] = useState<null | "configure" | "saveAsNew" | "activate">(null);
   const [models, setModels] = useState<Array<GenericModelRecord>>(selectedProvider?.models ?? []);
   const [defaults, setDefaults] = useState<DefaultAssignments>(buildDefaults(selectedProvider ?? null));
-
-  const form = useForm<ProviderFormValues>({
-    resolver: zodResolver(providerSaveSchema),
-    defaultValues: {
-      id: selectedProvider?.id ?? undefined,
-      name: selectedProvider?.name ?? "默认模型服务",
-      baseUrl: selectedProvider?.baseUrl ?? "",
-      apiKey: selectedProvider?.apiKey ?? "",
-      isActive: true,
-      defaultAssignments: undefined,
-    },
+  const [form, setForm] = useState({
+    id: selectedProvider?.id ?? "",
+    name: selectedProvider?.name ?? "默认 GPT 模型服务",
+    baseUrl: lockedBaseUrl || selectedProvider?.baseUrl || "https://api.openai-proxy.org/v1",
+    apiKey: "",
   });
-  const { reset } = form;
 
   useEffect(() => {
+    const stored = readStoredCredentials();
+    setForm((current) => ({
+      ...current,
+      baseUrl: lockedBaseUrl || stored.baseUrl || current.baseUrl,
+      apiKey: stored.apiKey || current.apiKey,
+    }));
+  }, [lockedBaseUrl]);
+
+  useEffect(() => {
+    const stored = readStoredCredentials();
     const nextProvider = selectedProvider ?? null;
     setModels(nextProvider?.models ?? []);
     setDefaults(buildDefaults(nextProvider));
-    reset({
-      id: nextProvider?.id ?? undefined,
-      name: nextProvider?.name ?? "默认模型服务",
-      baseUrl: nextProvider?.baseUrl ?? "",
-      apiKey: nextProvider?.apiKey ?? "",
-      isActive: true,
-      defaultAssignments: undefined,
+    setForm({
+      id: nextProvider?.id ?? "",
+      name: nextProvider?.name ?? "默认 GPT 模型服务",
+      baseUrl: lockedBaseUrl || nextProvider?.baseUrl || stored.baseUrl || "https://api.openai-proxy.org/v1",
+      apiKey: stored.apiKey,
     });
-  }, [selectedProvider, reset]);
+  }, [selectedProvider, lockedBaseUrl]);
 
-  const availableImageModels = useMemo(
-    () => models.filter(isImageGenerationModel),
+  type ProviderSubmitValues = ReturnType<typeof currentSubmitValues>;
+
+  const capabilityGroups = useMemo(
+    () =>
+      modelTypeFields
+        .map((field) => ({
+          ...field,
+          models: getModelsForType(models, field.key),
+        }))
+        .filter((group) => group.models.length > 0),
     [models],
   );
-  const capabilityGroups = useMemo(() => buildCapabilityGroups(models), [models]);
 
-  function handleAutoFillDefaults() {
-    setDefaults(buildRecommendedDefaults(models));
-    toast.success("已按模型能力类型自动填充默认角色");
+  function updateForm(patch: Partial<typeof form>) {
+    setForm((current) => ({ ...current, ...patch }));
   }
 
-  function hydrateFromSavedProviders(nextProviders: ProviderRecord[], nextSelectedId?: string | null) {
+  function currentSubmitValues() {
+    return {
+      id: form.id || undefined,
+      name: form.name.trim() || "默认 GPT 模型服务",
+      baseUrl: baseUrlLocked ? lockedBaseUrl : form.baseUrl.trim(),
+      apiKey: form.apiKey.trim(),
+      isActive: true,
+    };
+  }
+
+  function persistCurrentCredentials() {
+    const values = currentSubmitValues();
+    writeStoredCredentials({ apiKey: values.apiKey, baseUrl: values.baseUrl });
+    return values;
+  }
+
+  function hydrateFromProviderPayload(data: any, nextSelectedId?: string | null) {
+    const nextProviders: ProviderRecord[] = Array.isArray(data) ? data : data?.providers ?? [];
     setProviders(nextProviders);
     const fallbackId = nextSelectedId ?? nextProviders.find((item) => item.isActive)?.id ?? nextProviders[0]?.id ?? "";
     setSelectedProviderId(fallbackId);
   }
 
   async function handleActivateProvider(providerId: string) {
-    setSwitchingProviderId(providerId);
+    setLoading("activate");
     try {
       const response = await fetch("/api/providers", {
         method: "PATCH",
@@ -488,90 +340,90 @@ export function ProviderSettings({ initialProviders }: ProviderSettingsProps) {
         body: JSON.stringify({ providerId }),
       });
       const payload = await response.json();
-      if (!payload.success) {
-        throw new Error(payload.error?.message ?? "切换历史服务失败");
-      }
-
-      hydrateFromSavedProviders(payload.data ?? [], providerId);
+      if (!payload.success) throw new Error(payload.error?.message ?? "切换历史服务失败");
+      hydrateFromProviderPayload(payload.data, providerId);
       toast.success("已切换为当前服务");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "切换历史服务失败");
     } finally {
-      setSwitchingProviderId(null);
+      setLoading(null);
     }
   }
 
-  const handleTest = form.handleSubmit(async (values) => {
-    setLoading("test");
+  async function testProviderConnection(values: ProviderSubmitValues) {
+    const response = await fetch("/api/providers/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(values),
+    });
+    const payload = await response.json();
+    if (!payload.success) throw new Error(payload.error?.message ?? "连接测试失败");
+  }
+
+  async function discoverProviderModels(values: ProviderSubmitValues) {
+    const response = await fetch("/api/providers/discover-models", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(values),
+    });
+    const payload = await response.json();
+    if (!payload.success) throw new Error(payload.error?.message ?? "模型发现失败");
+
+    const discoveredModels = payload.data.models ?? [];
+    const recommendedDefaults = payload.data.recommendations ?? buildRecommendedDefaults(discoveredModels);
+    return { discoveredModels, recommendedDefaults };
+  }
+
+  async function persistProviderConfig(values: ProviderSubmitValues, overwriteExisting: boolean, discoveredModels = models, recommendedDefaults = defaults) {
+    const response = await fetch("/api/providers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...values,
+        id: overwriteExisting ? values.id : undefined,
+        defaultAssignments: recommendedDefaults,
+        discoveredModels,
+      }),
+    });
+    const payload = await response.json();
+    if (!payload.success) throw new Error(payload.error?.message ?? "配置保存失败");
+
+    const savedProviderId = payload.data?.savedProviderId ?? values.id ?? "";
+    hydrateFromProviderPayload(payload.data, savedProviderId);
+  }
+
+  async function handleOneClickConfigure() {
+    setLoading("configure");
     try {
-      const response = await fetch("/api/providers/test", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(values),
-      });
-      const payload = await response.json();
-      if (!payload.success) {
-        throw new Error(payload.error?.message ?? "连接测试失败");
-      }
-      toast.success("模型服务连接成功");
+      const values = persistCurrentCredentials();
+      await testProviderConnection(values);
+      const { discoveredModels, recommendedDefaults } = await discoverProviderModels(values);
+      setModels(discoveredModels);
+      setDefaults(recommendedDefaults);
+      await persistProviderConfig(values, true, discoveredModels, recommendedDefaults);
+      toast.success(`一键配置完成：已连接服务、识别 ${discoveredModels.length} 个模型并保存配置`);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "连接测试失败");
+      toast.error(error instanceof Error ? error.message : "一键配置失败");
     } finally {
       setLoading(null);
     }
-  });
+  }
 
-  const handleDiscover = form.handleSubmit(async (values) => {
-    setLoading("discover");
+  async function saveProviderAsNew() {
+    setLoading("saveAsNew");
     try {
-      const response = await fetch("/api/providers/discover-models", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(values),
-      });
-      const payload = await response.json();
-      if (!payload.success) {
-        throw new Error(payload.error?.message ?? "模型发现失败");
-      }
-      setModels(payload.data.models);
-      setDefaults(payload.data.recommendations);
-      toast.success(`已发现 ${payload.data.models.length} 个模型，并完成能力识别`);
+      const values = persistCurrentCredentials();
+      await persistProviderConfig(values, false);
+      toast.success("已另存为新服务，API Key 仅保存在本地浏览器");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "模型发现失败");
+      toast.error(error instanceof Error ? error.message : "配置保存失败");
     } finally {
       setLoading(null);
     }
-  });
-
-  async function saveProvider(overwriteExisting: boolean) {
-    return form.handleSubmit(async (values) => {
-      setLoading(overwriteExisting ? "save" : "saveAsNew");
-      try {
-        const response = await fetch("/api/providers", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ...values,
-            id: overwriteExisting ? values.id : undefined,
-            defaultAssignments: defaults,
-            discoveredModels: models,
-          }),
-        });
-        const payload = await response.json();
-        if (!payload.success) {
-          throw new Error(payload.error?.message ?? "配置保存失败");
-        }
-
-        const nextProviders = payload.data?.providers ?? [];
-        const savedProviderId = payload.data?.savedProviderId ?? values.id ?? "";
-        hydrateFromSavedProviders(nextProviders, savedProviderId);
-        toast.success(overwriteExisting ? "服务配置已保存" : "已另存为新的服务配置");
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : "配置保存失败");
-      } finally {
-        setLoading(null);
-      }
-    })();
+  }
+  function handleAutoFillDefaults() {
+    setDefaults(buildRecommendedDefaults(models));
+    toast.success("已按 GPT 优先和模型能力自动填充默认模型");
   }
 
   return (
@@ -579,13 +431,23 @@ export function ProviderSettings({ initialProviders }: ProviderSettingsProps) {
       <Card>
         <CardHeader>
           <CardTitle>模型服务连接</CardTitle>
-          <CardDescription>读取已保存服务、测试连接、重新发现模型，并保存当前配置。</CardDescription>
+          <CardDescription>API Key 只保存在当前浏览器。本地保存后，请求时临时传给后端，不写入服务器配置。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">
+          {baseUrlLocked ? (
+            <div className="flex items-start gap-3 rounded-3xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200">
+              <LockKeyhole className="mt-0.5 h-4 w-4" />
+              <div>
+                <p className="font-medium">当前平台已锁定专属 API 服务通道</p>
+                <p className="mt-1 text-xs opacity-80">前端填写的 baseURL 会被后端忽略，所有模型请求统一走部署方配置的 LOCK_BASE_URL。</p>
+              </div>
+            </div>
+          ) : null}
+
           <div className="space-y-3 rounded-3xl border border-border bg-muted/40 p-4">
             <div className="flex items-center gap-2">
               <History className="h-4 w-4 text-muted-foreground" />
-              <h3 className="font-medium">快捷读取已保存服务</h3>
+              <h3 className="font-medium">历史服务快照</h3>
             </div>
             <div className="flex flex-col gap-3 md:flex-row">
               <div className="flex-1 space-y-2">
@@ -608,21 +470,8 @@ export function ProviderSettings({ initialProviders }: ProviderSettingsProps) {
                 </div>
               </div>
               <div className="flex items-end gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => selectedProviderId && setSelectedProviderId(selectedProviderId)}
-                  disabled={!selectedProviderId}
-                >
-                  读取到表单
-                </Button>
-                <Button
-                  type="button"
-                  variant={selectedProvider?.isActive ? "secondary" : "default"}
-                  onClick={() => selectedProviderId && handleActivateProvider(selectedProviderId)}
-                  disabled={!selectedProviderId || selectedProvider?.isActive || switchingProviderId !== null}
-                >
-                  {switchingProviderId === selectedProviderId ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                <Button type="button" variant={selectedProvider?.isActive ? "secondary" : "default"} onClick={() => selectedProviderId && handleActivateProvider(selectedProviderId)} disabled={!selectedProviderId || selectedProvider?.isActive || loading !== null}>
+                  {loading === "activate" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                   {selectedProvider?.isActive ? "当前使用中" : "切换为当前服务"}
                 </Button>
               </div>
@@ -634,90 +483,52 @@ export function ProviderSettings({ initialProviders }: ProviderSettingsProps) {
                   {selectedProvider.isActive ? <Badge variant="success">当前服务</Badge> : null}
                 </div>
                 <p className="mt-2 text-sm text-muted-foreground">{selectedProvider.baseUrl}</p>
-                <p className="mt-1 text-xs text-muted-foreground">Key：{selectedProvider.maskedApiKey || "未显示"}</p>
+                <p className="mt-1 text-xs text-muted-foreground">Key：仅保存在当前浏览器</p>
                 <p className="mt-1 text-xs text-muted-foreground">最近更新：{formatTimeLabel(selectedProvider.updatedAt)}</p>
               </div>
             ) : (
-              <div className="rounded-2xl border border-dashed border-border p-4 text-sm text-muted-foreground">
-                还没有保存过服务配置。首次保存后，这里可以直接读取并快速切换。
-              </div>
+              <div className="rounded-2xl border border-dashed border-border p-4 text-sm text-muted-foreground">首次使用时，请填写 API Key 并发现模型。</div>
             )}
           </div>
 
           <form autoComplete="off" className="grid gap-4 md:grid-cols-2" onSubmit={(event) => event.preventDefault()}>
             <div className="space-y-2 md:col-span-2">
               <Label htmlFor="provider-name">服务名称</Label>
-              <Input
-                id="provider-name"
-                autoComplete="off"
-                autoCorrect="off"
-                spellCheck={false}
-                data-1p-ignore="true"
-                data-lpignore="true"
-                data-form-type="other"
-                placeholder="例如：OpenRouter / Gemini Gateway / 自建兼容网关"
-                {...form.register("name")}
-              />
+              <Input id="provider-name" autoComplete="off" value={form.name} onChange={(event) => updateForm({ name: event.target.value })} placeholder="默认 GPT 模型服务" />
             </div>
-            <div className="space-y-2 md:col-span-2">
-              <Label htmlFor="provider-base-url">baseURL</Label>
-              <Input
-                id="provider-base-url"
-                inputMode="url"
-                autoComplete="off"
-                autoCorrect="off"
-                autoCapitalize="none"
-                spellCheck={false}
-                data-1p-ignore="true"
-                data-lpignore="true"
-                data-form-type="other"
-                placeholder="https://your-provider.example/v1"
-                {...form.register("baseUrl")}
-              />
-            </div>
+            {!baseUrlLocked ? (
+              <div className="space-y-2 md:col-span-2">
+                <Label htmlFor="provider-base-url">baseURL</Label>
+                <Input id="provider-base-url" inputMode="url" autoComplete="off" autoCapitalize="none" value={form.baseUrl} onChange={(event) => updateForm({ baseUrl: event.target.value })} placeholder="https://your-provider.example/v1" />
+              </div>
+            ) : null}
             <div className="space-y-2 md:col-span-2">
               <Label htmlFor="provider-api-key">API Key</Label>
-              <Input
-                id="provider-api-key"
-                type="password"
-                autoComplete="new-password"
-                autoCorrect="off"
-                autoCapitalize="none"
-                spellCheck={false}
-                data-1p-ignore="true"
-                data-lpignore="true"
-                data-form-type="other"
-                placeholder="可留空；系统会自动复用当前服务已保存的 API Key"
-                {...form.register("apiKey")}
-              />
-              <p className="text-xs text-muted-foreground">
-                选择历史服务后，名称、URL 和 Key 会回填到表单；修改后可以覆盖保存，也可以另存为新的服务配置。
-              </p>
+              <Input id="provider-api-key" type="password" autoComplete="new-password" value={form.apiKey} onChange={(event) => updateForm({ apiKey: event.target.value })} placeholder="请输入当前浏览器使用的 API Key" />
+              <p className="text-xs text-muted-foreground">API Key 会写入浏览器 localStorage，不会保存到服务器数据库。不同设备需要分别配置。</p>
             </div>
           </form>
 
-          <div className="flex flex-wrap gap-3">
-            <Button type="button" variant="outline" onClick={handleTest} disabled={loading !== null}>
-              {loading === "test" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PlugZap className="mr-2 h-4 w-4" />}
-              测试连接
-            </Button>
-            <Button type="button" variant="secondary" onClick={handleDiscover} disabled={loading !== null}>
-              {loading === "discover" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Search className="mr-2 h-4 w-4" />}
-              发现模型并识别能力
-            </Button>
-            <Button type="button" onClick={() => saveProvider(true)} disabled={loading !== null || models.length === 0}>
-              {loading === "save" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-              {selectedProvider ? "覆盖保存当前服务" : "保存当前配置"}
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => saveProvider(false)}
-              disabled={loading !== null || models.length === 0}
-            >
-              {loading === "saveAsNew" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CopyPlus className="mr-2 h-4 w-4" />}
-              另存为新服务
-            </Button>
+          <div className="space-y-3 rounded-3xl border border-border bg-muted/35 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="space-y-1">
+                <p className="text-sm font-medium">一键配置模型服务</p>
+                <p className="text-xs leading-6 text-muted-foreground">
+                  系统会自动完成本地保存凭证、测试连接、发现模型、识别能力并保存当前服务配置。
+                </p>
+              </div>
+              <Button type="button" onClick={handleOneClickConfigure} disabled={loading !== null || !form.apiKey.trim()} className="h-11 shrink-0 gap-2 px-5">
+                {loading === "configure" ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlugZap className="h-4 w-4" />}
+                {loading === "configure" ? "正在一键配置..." : selectedProvider ? "一键测试、探测并保存" : "一键配置"}
+              </Button>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/70 pt-3">
+              <p className="text-xs text-muted-foreground">需要保留当前历史服务时，可先一键配置确认模型，再另存为新服务。</p>
+              <Button type="button" variant="outline" onClick={saveProviderAsNew} disabled={loading !== null || models.length === 0 || !form.apiKey.trim()}>
+                {loading === "saveAsNew" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CopyPlus className="mr-2 h-4 w-4" />}
+                另存为新服务
+              </Button>
+            </div>
           </div>
 
           {models.length > 0 ? (
@@ -727,38 +538,20 @@ export function ProviderSettings({ initialProviders }: ProviderSettingsProps) {
                   <h3 className="font-medium">默认模型类型分配</h3>
                   <Badge>{models.length} 个模型</Badge>
                 </div>
-                <Button type="button" variant="outline" size="sm" onClick={handleAutoFillDefaults}>
-                  按能力自动填充
-                </Button>
+                <Button type="button" variant="outline" size="sm" onClick={handleAutoFillDefaults}>按 GPT 优先自动填充</Button>
               </div>
-
-              {availableImageModels.length === 0 ? (
-                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300">
-                  当前 Provider 尚未识别到图像生成模型，头图和详情图角色会被禁用。
-                </div>
-              ) : null}
 
               <div className="grid gap-4 md:grid-cols-2">
                 {modelTypeFields.map((field) => {
                   const options = getModelsForType(models, field.key);
                   const selectedValue = getTypeDefaultValue(defaults, field.key);
-
                   return (
                     <div key={field.key} className="space-y-2">
                       <Label>{field.label}</Label>
-                      <select
-                        className="flex h-10 w-full rounded-xl border border-input bg-background px-3 text-sm text-foreground dark:bg-black/30"
-                        value={selectedValue}
-                        disabled={options.length === 0}
-                        onChange={(event) =>
-                          setDefaults((current) => setTypeDefaultValue(current, field.key, event.target.value))
-                        }
-                      >
+                      <select className="flex h-10 w-full rounded-xl border border-input bg-background px-3 text-sm text-foreground dark:bg-black/30" value={selectedValue} disabled={options.length === 0} onChange={(event) => setDefaults((current) => setTypeDefaultValue(current, field.key, event.target.value))}>
                         <option value="">{options.length === 0 ? "暂无此类型模型" : "未选择"}</option>
                         {options.map((model) => (
-                          <option key={field.key + "-" + model.modelId} value={model.modelId}>
-                            {model.label}
-                          </option>
+                          <option key={`${field.key}-${model.modelId}`} value={model.modelId}>{model.label}</option>
                         ))}
                       </select>
                     </div>
@@ -773,36 +566,25 @@ export function ProviderSettings({ initialProviders }: ProviderSettingsProps) {
       <Card>
         <CardHeader>
           <CardTitle>模型能力分组</CardTitle>
-          <CardDescription>按功能类型聚合模型，避免大量模型逐条铺开。</CardDescription>
+          <CardDescription>按功能类型聚合模型。默认排序优先 GPT 文本模型和 GPT Image 系列。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {models.length === 0 ? (
-            <div className="rounded-3xl border border-dashed border-border p-6 text-sm text-muted-foreground">
-              先测试并发现模型，系统会在这里按能力类型展示可用模型。
-            </div>
+            <div className="rounded-3xl border border-dashed border-border p-6 text-sm text-muted-foreground">先发现模型，系统会按能力类型展示可用模型。</div>
           ) : (
             <div className="grid gap-4">
               {capabilityGroups.map((group) => {
                 const visibleModels = group.models.slice(0, 18);
                 const hiddenCount = Math.max(0, group.models.length - visibleModels.length);
-                const isPassiveImageGroup = group.key === "image_gen" || group.key === "image_edit";
-
                 return (
                   <div key={group.key} className="rounded-3xl border border-border p-4">
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h3 className="font-medium">{group.label}</h3>
-                        <Badge variant="outline">{group.models.length} 个模型</Badge>
-                        {isPassiveImageGroup ? <Badge variant="outline">未实测端点</Badge> : null}
-                      </div>
-                      <p className="mt-1 text-sm text-muted-foreground">{group.description}</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="font-medium">{group.label}</h3>
+                      <Badge variant="outline">{group.models.length} 个模型</Badge>
                     </div>
-
                     <div className="mt-4 flex flex-wrap gap-2">
                       {visibleModels.map((model) => (
-                        <Badge key={group.key + "-" + model.modelId} variant="outline" className="max-w-full truncate">
-                          {model.label}
-                        </Badge>
+                        <Badge key={`${group.key}-${model.modelId}`} variant="outline" className="max-w-full truncate">{model.label}</Badge>
                       ))}
                       {hiddenCount > 0 ? <Badge>+ {hiddenCount} 个</Badge> : null}
                     </div>

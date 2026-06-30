@@ -2,8 +2,9 @@ export function ThemeScript() {
   const script = `
     (function () {
       try {
-        var key = 'banana-mall-theme';
-        var stored = localStorage.getItem(key);
+        var key = 'mxpage-theme';
+        var legacyKey = 'banana-mall-theme';
+        var stored = localStorage.getItem(key) || localStorage.getItem(legacyKey);
         var theme = stored === 'dark' || stored === 'light'
           ? stored
           : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');

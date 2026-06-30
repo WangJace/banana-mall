@@ -1,24 +1,24 @@
 {
-  "name": "ai-product-page-generator",
+  "name": "mxpage",
   "version": "0.1.0",
   "private": false,
-  "description": "AI e-commerce detail page generation and editing workspace",
-  "author": "MatrixInspire Inc",
+  "description": "MxPage AI e-commerce detail page generation and editing workspace",
+  "author": "灵矩绘境 · MxPage",
   "main": "desktop/main.cjs",
   "scripts": {
-  "dev": "node ./scripts/run-next-safe.cjs dev",
-  "build": "npm run prisma:generate && node ./scripts/run-next-safe.cjs build",
-  "start": "node ./scripts/run-next-safe.cjs start",
-  "desktop:start": "node ./scripts/build-desktop.cjs start",
-  "build:desktop": "node ./scripts/build-desktop.cjs prepare",
-  "dist:win": "npm run build:desktop && .\\node_modules\\.bin\\electron-builder.cmd --win nsis",
-  "dist:green": "npm run build:desktop && .\\node_modules\\.bin\\electron-builder.cmd --win dir zip",
-  "dist:all-win": "npm run build:desktop && .\\node_modules\\.bin\\electron-builder.cmd --win nsis dir zip",
-  "lint": "node -e \"console.log('Linting is not configured for this Windows path-safe build.')\"",
-  "prisma:generate": "node ./scripts/run-prisma-safe.cjs generate",
-  "prisma:migrate": "node ./scripts/apply-prisma-migrations.cjs",
-  "prisma:deploy": "node ./scripts/apply-prisma-migrations.cjs"
-},
+    "dev": "node ./scripts/run-next-safe.cjs dev",
+    "build": "npm run prisma:generate && node ./scripts/run-next-safe.cjs build",
+    "start": "node ./scripts/run-next-safe.cjs start",
+    "desktop:start": "node ./scripts/build-desktop.cjs start",
+    "build:desktop": "node ./scripts/build-desktop.cjs prepare",
+    "dist:win": "npm run build:desktop && .\\node_modules\\.bin\\electron-builder.cmd --win nsis",
+    "dist:green": "npm run build:desktop && .\\node_modules\\.bin\\electron-builder.cmd --win dir zip",
+    "dist:all-win": "npm run build:desktop && .\\node_modules\\.bin\\electron-builder.cmd --win nsis dir zip",
+    "lint": "node -e \"console.log('Linting is not configured for this Windows path-safe build.')\"",
+    "prisma:generate": "node ./scripts/run-prisma-safe.cjs generate",
+    "prisma:migrate": "node ./scripts/apply-prisma-migrations.cjs",
+    "prisma:deploy": "node ./scripts/apply-prisma-migrations.cjs"
+  },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
     "@prisma/client": "^6.19.2",
@@ -60,12 +60,12 @@
     "typescript": "^5.8.3"
   },
   "build": {
-    "appId": "com.matrixinspire.bananamall",
-    "productName": "AI Product Page Generator",
+    "appId": "com.mxpage.app",
+    "productName": "MxPage",
     "asar": false,
     "asarUnpack": [
-      ".next/standalone/node_modules/.prisma/**/*",
-      ".next/standalone/node_modules/@prisma/**/*"
+      ".next-desktop/standalone/node_modules/.prisma/**/*",
+      ".next-desktop/standalone/node_modules/@prisma/**/*"
     ],
     "directories": {
       "output": "dist-desktop",
@@ -73,8 +73,8 @@
     },
     "files": [
       "desktop/**/*",
-      ".next/standalone/**/*",
-      ".next/static/**/*",
+      ".next-desktop/standalone/**/*",
+      ".next-desktop/static/**/*",
       "public/**/*",
       "scripts/runtime-paths.cjs",
       "scripts/apply-prisma-migrations.cjs",
@@ -102,7 +102,7 @@
           ]
         }
       ],
-      "artifactName": "ai-product-page-generator-${version}.${ext}"
+      "artifactName": "mxpage-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,

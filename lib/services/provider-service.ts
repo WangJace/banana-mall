@@ -2,7 +2,8 @@ import { prisma } from "@/lib/db/prisma";
 import { OpenAICompatibleAdapter } from "@/lib/ai/adapters/openai-compatible";
 import { normalizeDetectedModels } from "@/lib/ai/capability-detector";
 import { recommendDefaultModels } from "@/lib/ai/model-matcher";
-import { decryptSecret, encryptSecret } from "@/lib/utils/crypto";
+import { encryptSecret } from "@/lib/utils/crypto";
+import { getRequestProviderCredentials, resolveEffectiveBaseUrl } from "@/lib/services/provider-runtime";
 import type {
   CapabilityMap,
   ModelDetectionResult,
@@ -74,6 +75,16 @@ type DiscoveredProviderModel = {
   modalities?: string[];
 };
 
+const OPENAI_TEXT_MODEL_PRESETS: DiscoveredProviderModel[] = [
+  { id: "gpt-5-mini", label: "gpt-5-mini", type: "text", category: "chat" },
+  { id: "gpt-5-nano", label: "gpt-5-nano", type: "text", category: "chat" },
+  { id: "gpt-4.1-mini", label: "gpt-4.1-mini", type: "text", category: "chat" },
+  { id: "gpt-4.1-nano", label: "gpt-4.1-nano", type: "text", category: "chat" },
+  { id: "gpt-4o-mini", label: "gpt-4o-mini", type: "text", category: "chat" },
+  { id: "gpt-4o", label: "gpt-4o", type: "text", category: "chat", modalities: ["text", "vision"] },
+  { id: "gpt-4.1", label: "gpt-4.1", type: "text", category: "chat", modalities: ["text", "vision"] },
+];
+
 const OPENAI_IMAGE_MODEL_PRESETS: DiscoveredProviderModel[] = [
   { id: "gpt-image-2-2026-04-21", label: "gpt-image-2-2026-04-21", type: "image", category: "image" },
   { id: "gpt-image-2", label: "gpt-image-2", type: "image", category: "image" },
@@ -120,7 +131,8 @@ function mergeDiscoveredModels(baseUrl: string, models: DiscoveredProviderModel[
   }
 
   const seen = new Set(models.map((model) => model.id.toLowerCase()));
-  const missingPresets = OPENAI_IMAGE_MODEL_PRESETS.filter((model) => !seen.has(model.id.toLowerCase()));
+  const presets = [...OPENAI_TEXT_MODEL_PRESETS, ...OPENAI_IMAGE_MODEL_PRESETS];
+  const missingPresets = presets.filter((model) => !seen.has(model.id.toLowerCase()));
   return [...models, ...missingPresets];
 }
 
@@ -134,7 +146,7 @@ function mergeHydratedProviderModels<T extends RuntimeProviderModel>(
   }
 
   const seen = new Set(models.map((model) => model.modelId.toLowerCase()));
-  const missingPresets = OPENAI_IMAGE_MODEL_PRESETS.filter((model) => !seen.has(model.id.toLowerCase()));
+  const missingPresets = [...OPENAI_TEXT_MODEL_PRESETS, ...OPENAI_IMAGE_MODEL_PRESETS].filter((model) => !seen.has(model.id.toLowerCase()));
   if (missingPresets.length === 0) {
     return models;
   }
@@ -169,7 +181,7 @@ function mergeHydratedProviderModels<T extends RuntimeProviderModel>(
 }
 
 const PASSIVE_IMAGE_CAPABILITY_NOTE =
-  "未发起真实图像接口调用；仅根据 /models 返回和模型名称识别能力，实际可用性会在生成时验证。";
+  "Passive capability detection only; no real image endpoint probe is called during model discovery.";
 
 function enrichModelEndpointSupport(models: ProviderModelSnapshot[]) {
   return models.map((model) => {
@@ -234,49 +246,37 @@ async function replaceProviderModels(
 }
 
 export async function testProviderConnection(input: ProviderConnectionInput) {
-  const adapter = new OpenAICompatibleAdapter(input.baseUrl, input.apiKey);
+  const adapter = new OpenAICompatibleAdapter(resolveEffectiveBaseUrl(input.baseUrl), input.apiKey);
   return adapter.testConnection();
 }
 
 export async function resolveProviderConnectionInput(
   input: Omit<ProviderConnectionInput, "apiKey"> & { apiKey?: string | null; id?: string | null },
 ): Promise<ProviderConnectionInput> {
-  const trimmedKey = input.apiKey?.trim() ?? "";
-  if (trimmedKey.length >= 6) {
-    return {
-      name: input.name,
-      baseUrl: input.baseUrl,
-      apiKey: trimmedKey,
-    };
+  const runtimeCredentials = getRequestProviderCredentials();
+  const apiKey = input.apiKey?.trim() || runtimeCredentials.apiKey?.trim() || "";
+  const baseUrl = resolveEffectiveBaseUrl(input.baseUrl || runtimeCredentials.baseUrl);
+
+  if (!apiKey) {
+    throw new Error("API Key is not configured in this browser. Configure it in Provider settings first.");
   }
 
-  const matchedProvider =
-    (input.id
-      ? await prisma.providerConfig.findUnique({
-          where: { id: input.id },
-        })
-      : await prisma.providerConfig.findFirst({
-          where: {
-            OR: [{ baseUrl: input.baseUrl }, { isActive: true }],
-          },
-          orderBy: [{ isActive: "desc" }, { updatedAt: "desc" }],
-        })) ?? null;
-
-  if (!matchedProvider) {
-    throw new Error("当前没有可复用的已保存 API Key，请重新输入 API Key 后再试。");
+  if (!baseUrl) {
+    throw new Error("Provider baseURL is not configured. Set it in the UI or LOCK_BASE_URL.");
   }
 
   return {
     name: input.name,
-    baseUrl: input.baseUrl,
-    apiKey: decryptSecret(matchedProvider.apiKeyEncrypted),
+    baseUrl,
+    apiKey,
   };
 }
 
 export async function discoverProviderModels(input: ProviderConnectionInput) {
-  const adapter = new OpenAICompatibleAdapter(input.baseUrl, input.apiKey);
+  const baseUrl = resolveEffectiveBaseUrl(input.baseUrl);
+  const adapter = new OpenAICompatibleAdapter(baseUrl, input.apiKey);
   const models = await adapter.listModels();
-  const normalized = enrichModelEndpointSupport(normalizeDetectedModels(mergeDiscoveredModels(input.baseUrl, models)));
+  const normalized = enrichModelEndpointSupport(normalizeDetectedModels(mergeDiscoveredModels(baseUrl, models)));
   return {
     models: normalized,
     recommendations: recommendDefaultModels(normalized),
@@ -297,9 +297,10 @@ export async function saveProviderConfig(
     };
   },
 ) {
+  const baseUrl = resolveEffectiveBaseUrl(input.baseUrl);
   const discoveredModels = input.discoveredModels?.length
     ? enrichModelEndpointSupport(input.discoveredModels)
-    : (await discoverProviderModels(input)).models;
+    : (await discoverProviderModels({ ...input, baseUrl })).models;
   const discovered = {
     models: discoveredModels,
     recommendations: recommendDefaultModels(discoveredModels),
@@ -317,16 +318,16 @@ export async function saveProviderConfig(
         where: { id: input.id },
         data: {
           name: input.name,
-          baseUrl: input.baseUrl,
-          apiKeyEncrypted: encryptSecret(input.apiKey),
+          baseUrl,
+          apiKeyEncrypted: encryptSecret(""),
           isActive: nextIsActive,
         },
       })
     : await prisma.providerConfig.create({
         data: {
           name: input.name,
-          baseUrl: input.baseUrl,
-          apiKeyEncrypted: encryptSecret(input.apiKey),
+          baseUrl,
+          apiKeyEncrypted: encryptSecret(""),
           isActive: nextIsActive,
         },
       });
@@ -351,14 +352,15 @@ export async function getAllProviderConfigs() {
   });
 
   return providers.map((provider) => {
-    const apiKey = decryptSecret(provider.apiKeyEncrypted);
+    const effectiveBaseUrl = resolveEffectiveBaseUrl(provider.baseUrl);
     return {
       ...provider,
-      apiKey,
-      maskedApiKey: maskApiKey(apiKey),
+      baseUrl: effectiveBaseUrl,
+      apiKey: "",
+      maskedApiKey: "",
       models: mergeHydratedProviderModels(
         provider.id,
-        provider.baseUrl,
+        effectiveBaseUrl,
         hydrateProviderModels(provider.models) as RuntimeProviderModel[],
       ),
     };
@@ -377,14 +379,15 @@ export async function getActiveProviderConfig() {
 
   if (!provider) return null;
 
-  const apiKey = decryptSecret(provider.apiKeyEncrypted);
+  const effectiveBaseUrl = resolveEffectiveBaseUrl(provider.baseUrl);
   return {
     ...provider,
-    apiKey,
-    maskedApiKey: maskApiKey(apiKey),
+    baseUrl: effectiveBaseUrl,
+    apiKey: "",
+    maskedApiKey: "",
     models: mergeHydratedProviderModels(
       provider.id,
-      provider.baseUrl,
+      effectiveBaseUrl,
       hydrateProviderModels(provider.models) as RuntimeProviderModel[],
     ),
   };
@@ -428,15 +431,21 @@ export async function getProviderAdapter(providerId?: string): Promise<ProviderA
     throw new Error("No active provider config found.");
   }
 
-  const apiKey = decryptSecret(provider.apiKeyEncrypted);
+  const runtimeCredentials = getRequestProviderCredentials();
+  const apiKey = runtimeCredentials.apiKey?.trim() ?? "";
+  if (!apiKey) {
+    throw new Error("API Key is not configured in this browser. Configure it in Provider settings first.");
+  }
+  const baseUrl = resolveEffectiveBaseUrl(runtimeCredentials.baseUrl ?? provider.baseUrl);
   const runtimeModels = hydrateProviderModels(provider.models) as unknown as RuntimeProviderModel[];
 
   return {
     provider: {
       ...provider,
+      baseUrl,
       models: runtimeModels,
     },
     apiKey,
-    adapter: new OpenAICompatibleAdapter(provider.baseUrl, apiKey),
+    adapter: new OpenAICompatibleAdapter(baseUrl, apiKey),
   };
 }

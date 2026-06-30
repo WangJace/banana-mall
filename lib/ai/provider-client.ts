@@ -24,6 +24,7 @@ export interface StructuredRequest<T> {
   images?: string[];
   timeoutMs?: number;
   monitor?: AiMonitorContext;
+  suppressUsageLog?: boolean;
 }
 
 export interface TextRequest {
@@ -33,6 +34,7 @@ export interface TextRequest {
   images?: string[];
   timeoutMs?: number;
   monitor?: AiMonitorContext;
+  suppressUsageLog?: boolean;
 }
 
 export interface ImageGenerationRequest {
@@ -41,6 +43,7 @@ export interface ImageGenerationRequest {
   size?: string;
   aspectRatio?: "1:1" | "3:4" | "9:16";
   referenceImages?: string[];
+  timeoutMs?: number;
   monitor?: AiMonitorContext;
 }
 
@@ -52,6 +55,7 @@ export interface ImageEditRequest {
   size?: string;
   aspectRatio?: "1:1" | "3:4" | "9:16";
   referenceImages?: string[];
+  timeoutMs?: number;
   monitor?: AiMonitorContext;
 }
 

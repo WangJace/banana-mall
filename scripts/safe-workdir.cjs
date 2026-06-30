@@ -3,7 +3,7 @@ const os = require("os");
 const path = require("path");
 
 function getSafeAliasPath() {
-  return path.join(os.tmpdir(), "banana-mall-safe-workdir");
+  return path.join(os.tmpdir(), "MxPage-safe-workdir");
 }
 
 function ensureSafeWorkdir(targetDir) {

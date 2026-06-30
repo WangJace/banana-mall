@@ -6,6 +6,8 @@ const { spawn } = require("child_process");
 const { ensureSafeWorkdir } = require("./safe-workdir.cjs");
 
 const projectRoot = path.resolve(__dirname, "..");
+const desktopDistDirName = ".next-desktop";
+const desktopDistDir = path.join(projectRoot, desktopDistDirName);
 const safeCwd = ensureSafeWorkdir(projectRoot);
 
 function runCommand(command, args, options = {}) {
@@ -64,12 +66,12 @@ async function pathExists(targetPath) {
 async function runNextBuild() {
   await runCommand(process.execPath, [path.join(projectRoot, "scripts", "run-next-safe.cjs"), "build"], {
     cwd: projectRoot,
-    env: process.env,
+    env: { ...process.env, NEXT_DIST_DIR: desktopDistDirName },
   });
 }
 
 async function prepareStandaloneBundle() {
-  const standaloneRoot = path.join(projectRoot, ".next", "standalone");
+  const standaloneRoot = path.join(desktopDistDir, "standalone");
   const serverEntry = path.join(standaloneRoot, "server.js");
 
   if (!(await pathExists(serverEntry))) {
@@ -77,12 +79,13 @@ async function prepareStandaloneBundle() {
   }
 
   await removePath(path.join(standaloneRoot, ".next", "static"));
+  await removePath(path.join(standaloneRoot, desktopDistDirName, "static"));
   await removePath(path.join(standaloneRoot, "public"));
   await removePath(path.join(standaloneRoot, "prisma"));
   await removePath(path.join(standaloneRoot, "scripts"));
   await removePath(path.join(standaloneRoot, "desktop"));
 
-  await copyDirectory(path.join(projectRoot, ".next", "static"), path.join(standaloneRoot, ".next", "static"));
+  await copyDirectory(path.join(desktopDistDir, "static"), path.join(standaloneRoot, desktopDistDirName, "static"));
 
   if (await pathExists(path.join(projectRoot, "public"))) {
     await copyDirectory(path.join(projectRoot, "public"), path.join(standaloneRoot, "public"));

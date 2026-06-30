@@ -1,4 +1,4 @@
-import { z } from "zod";
+﻿import { z } from "zod";
 
 export const productAnalysisOutputSchema = z.object({
   productName: z.string(),
@@ -13,6 +13,7 @@ export const productAnalysisOutputSchema = z.object({
   differentiationPoints: z.array(z.string()),
   userConcerns: z.array(z.string()),
   recommendedFocusPoints: z.array(z.string()),
+  additionalInformation: z.string().default(""),
   suggestedSectionPlan: z.array(
     z.object({
       type: z.string(),

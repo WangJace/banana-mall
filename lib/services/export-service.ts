@@ -8,7 +8,7 @@ import { prisma } from "@/lib/db/prisma";
 import { completeTask, createTask, failTask, findRecentRunningTask } from "@/lib/services/task-service";
 import { readStorageFile } from "@/lib/storage/asset-manager";
 import { contentLanguageLabels, normalizeContentLanguage } from "@/lib/utils/content-language";
-import { extFromMime, sanitizeFileName } from "@/lib/utils/files";
+import { extFromMime } from "@/lib/utils/files";
 import { assetTypeLabels, sectionTypeLabels } from "@/types/domain";
 
 function getPreviewConfig(project: { modelSnapshot: unknown } | null) {
@@ -75,6 +75,14 @@ function buildDetailAssets(project: {
       sourceLabel:
         sectionTypeLabels[section.type.toLowerCase() as keyof typeof sectionTypeLabels] ?? section.sectionKey,
     }));
+}
+
+const EXPORT_HERO_DIR = "00-\u5934\u56fe";
+const EXPORT_DETAIL_DIR = "01-\u8be6\u60c5\u9875";
+
+function buildExportImageFileName(exportTimestamp: number, index: number, ext: string) {
+  const normalizedExt = ext.startsWith(".") ? ext : `.${ext}`;
+  return `mx_${exportTimestamp}_${String(index + 1).padStart(2, "0")}${normalizedExt}`;
 }
 
 export async function buildProjectJson(projectId: string) {
@@ -144,7 +152,8 @@ export async function buildImageArchive(projectId: string) {
 
   try {
     const archive = archiver("zip", { zlib: { level: 9 } });
-    const tempZipPath = path.join(process.cwd(), `tmp-export-${projectId}-${Date.now()}.zip`);
+    const exportTimestamp = Date.now();
+    const tempZipPath = path.join(process.cwd(), `tmp-export-${projectId}-${exportTimestamp}.zip`);
     const output = fs.createWriteStream(tempZipPath);
     archive.pipe(output);
 
@@ -155,17 +164,15 @@ export async function buildImageArchive(projectId: string) {
       ...galleryAssets.map(async (item, index) => {
         const buffer = await readStorageFile(item.asset.filePath);
         const ext = path.extname(item.asset.fileName) || `.${extFromMime(item.asset.mimeType)}`;
-        const safeTitle = sanitizeFileName(item.title || `hero-${index + 1}`);
         archive.append(buffer, {
-          name: `00-头图/${String(index + 1).padStart(2, "0")}-${safeTitle}${ext}`,
+          name: `${EXPORT_HERO_DIR}/${buildExportImageFileName(exportTimestamp, index, ext)}`,
         });
       }),
       ...detailAssets.map(async (item, index) => {
         const buffer = await readStorageFile(item.asset.filePath);
         const ext = path.extname(item.asset.fileName) || `.${extFromMime(item.asset.mimeType)}`;
-        const safeTitle = sanitizeFileName(item.section.title || item.section.sectionKey || `detail-${index + 1}`);
         archive.append(buffer, {
-          name: `01-详情页/${String(index + 1).padStart(2, "0")}-${safeTitle}${ext}`,
+          name: `${EXPORT_DETAIL_DIR}/${buildExportImageFileName(exportTimestamp, index, ext)}`,
         });
       }),
     ]);
@@ -174,6 +181,7 @@ export async function buildImageArchive(projectId: string) {
       projectId: project.id,
       projectName: project.name,
       exportedAt: new Date().toISOString(),
+      exportTimestamp,
       heroImageCount: galleryAssets.length,
       detailImageCount: detailAssets.length,
       previewConfig: getPreviewConfig(project),
@@ -182,7 +190,17 @@ export async function buildImageArchive(projectId: string) {
         order: index + 1,
         title: item.title,
         sourceLabel: item.sourceLabel,
-        fileName: item.asset.fileName,
+        fileName: buildExportImageFileName(
+          exportTimestamp,
+          index,
+          path.extname(item.asset.fileName) || `.${extFromMime(item.asset.mimeType)}`,
+        ),
+        originalFileName: item.asset.fileName,
+        zipPath: `${EXPORT_HERO_DIR}/${buildExportImageFileName(
+          exportTimestamp,
+          index,
+          path.extname(item.asset.fileName) || `.${extFromMime(item.asset.mimeType)}`,
+        )}`,
         mimeType: item.asset.mimeType,
       })),
       details: detailAssets.map((item, index) => ({
@@ -191,7 +209,17 @@ export async function buildImageArchive(projectId: string) {
         title: item.section.title,
         sectionType: item.section.type,
         sourceLabel: item.sourceLabel,
-        fileName: item.asset.fileName,
+        fileName: buildExportImageFileName(
+          exportTimestamp,
+          index,
+          path.extname(item.asset.fileName) || `.${extFromMime(item.asset.mimeType)}`,
+        ),
+        originalFileName: item.asset.fileName,
+        zipPath: `${EXPORT_DETAIL_DIR}/${buildExportImageFileName(
+          exportTimestamp,
+          index,
+          path.extname(item.asset.fileName) || `.${extFromMime(item.asset.mimeType)}`,
+        )}`,
         mimeType: item.asset.mimeType,
       })),
     };

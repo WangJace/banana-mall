@@ -3,17 +3,20 @@ import { z } from "zod";
 
 import { analyzeProject } from "@/lib/services/analysis-service";
 import { handleRouteError, ok } from "@/lib/utils/route";
+import { withProviderCredentials } from "@/lib/services/provider-runtime";
 
 const analyzeRequestSchema = z.object({
   modelId: z.string().optional().nullable(),
 });
 
 export async function POST(request: NextRequest, context: { params: { id: string } }) {
-  try {
+  return withProviderCredentials(request, async () => {
+    try {
     const input = analyzeRequestSchema.parse(await request.json().catch(() => ({})));
     const analysis = await analyzeProject(context.params.id, input.modelId);
     return ok(analysis);
-  } catch (error) {
-    return handleRouteError(error);
-  }
+    } catch (error) {
+      return handleRouteError(error);
+    }
+  });
 }
