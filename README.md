@@ -4,6 +4,13 @@ MxPage is an AI-native workspace for generating and editing e-commerce product d
 
 MxPage 是由灵矩绘境出品并维护的 AI 商品图文工作台，面向电商详情页、小红书图文、批量商品页面生成和本地私有化部署。
 
+## Example
+
+<img width="3840" height="2126" alt="image" src="https://github.com/user-attachments/assets/68f49a9f-875f-4397-ade6-426df6337134" />
+<img width="3840" height="2126" alt="image" src="https://github.com/user-attachments/assets/95ff74e2-4b32-4f48-9d40-e1b26da1dcfa" />
+<img width="3840" height="2029" alt="image" src="https://github.com/user-attachments/assets/aadadb16-ed6e-4eab-8003-288b687339f6" />
+
+
 ## Core Features
 
 - Product image upload, product analysis, and structured page planning.
