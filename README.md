@@ -306,15 +306,22 @@ MxPage
 
 ## Star History
 
-<a href="https://www.star-history.com/#ziguishian/MxPage&Date">
+<a href="https://www.star-history.com/#ziguishian/ai-product-page-generator&date">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=ziguishian/MxPage&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=ziguishian/MxPage&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=ziguishian/MxPage&type=Date" />
+    <source
+      media="(prefers-color-scheme: dark)"
+      srcset="https://api.star-history.com/chart?repos=ziguishian/ai-product-page-generator&type=date&theme=dark&legend=top-left"
+    />
+    <source
+      media="(prefers-color-scheme: light)"
+      srcset="https://api.star-history.com/chart?repos=ziguishian/ai-product-page-generator&type=date&legend=top-left"
+    />
+    <img
+      alt="Star History Chart"
+      src="https://api.star-history.com/chart?repos=ziguishian/ai-product-page-generator&type=date&legend=top-left"
+    />
   </picture>
 </a>
-
----
 
 ## 欢迎交流
 
